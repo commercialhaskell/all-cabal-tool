@@ -1,0 +1,6 @@
+.stack-work/
+00-index.tar.gz
+all-cabal-files/
+all-cabal-hashes/
+all-cabal-metadata/
+*~
