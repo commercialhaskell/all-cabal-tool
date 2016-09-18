@@ -48,3 +48,6 @@ then
 else
     echo No changes present
 fi
+
+echo Completed run-inner.sh
+date
