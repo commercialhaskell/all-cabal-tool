@@ -6,6 +6,7 @@ cd ~/all-cabal-files
 wget -q http://hackage.fpcomplete.com/01-index.tar.gz
 tar xf 01-index.tar.gz
 rm -f 01-index.tar.gz
+find . -name package.json -exec rm {} \;
 if [ -n "$(git status --porcelain)" ]
 then
     git add -A
