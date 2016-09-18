@@ -60,14 +60,14 @@ ensureGitRepo dir branch = do
     exists <- doesDirectoryExist dir
     if exists
         then do
-            --run dir "git" ["clean", "-fdx"]
+            run dir "git" ["clean", "-fdx"]
             run dir "git" ["remote", "set-url", "origin", url]
             run dir "git" ["fetch"]
             run dir "git" ["checkout", "origin/" ++ branch]
             run dir "git" ["branch", "-D", branch]
             run dir "git" ["checkout", "-b", branch]
             run dir "git" ["branch", "-u", "origin/" ++ branch]
-            --run dir "git" ["clean", "-fdx"]
+            run dir "git" ["clean", "-fdx"]
         else run "." "git"
             [ "clone"
             , "--depth=1"
@@ -83,11 +83,12 @@ ensureGitRepo dir branch = do
 main :: IO ()
 main = do
     hackageRoot <- getEnv "HACKAGE_ROOT"
-    indexReq <- parseRequest $ hackageRoot ++ "/packages/00-index.tar.gz"
+    indexReq <- parseRequest $ hackageRoot ++ "/00-index.tar.gz"
 
-    ensureGitRepo allCabalFiles "hackage"
-    ensureGitRepo allCabalHashes "hackage"
-    ensureGitRepo allCabalMetadata "master"
+    when False $ do
+        ensureGitRepo allCabalFiles "hackage"
+        ensureGitRepo allCabalHashes "hackage"
+        ensureGitRepo allCabalMetadata "master"
 
     let loop mlastEtag = do
             putStrLn $ "Checking index, etag == " ++ tshow mlastEtag
