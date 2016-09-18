@@ -3,7 +3,7 @@
 set -eux
 
 cd ~/all-cabal-files
-wget http://hackage.fpcomplete.com/01-index.tar.gz
+wget -q http://hackage.fpcomplete.com/01-index.tar.gz
 tar xf 01-index.tar.gz
 rm -f 01-index.tar.gz
 if [ -n "$(git status --porcelain)" ]
