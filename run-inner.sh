@@ -22,6 +22,7 @@ then
     git archive current-hackage --format tar -o 00-index.tar
     gzip 00-index.tar
     aws s3 cp 00-index.tar.gz s3://$S3_BUCKET/00-index.tar.gz
+    rm -f 00-index.tar.gz
 else
     echo No changes present
 fi
