@@ -9,6 +9,7 @@ ssh-keyscan -H github.com >> $HOME/.ssh/known_hosts
 source /secret-mirror/config.sh
 export AWS_ACCESS_KEY_ID
 export AWS_SECRET_ACCESS_KEY
+export S3_BUCKET
 
 git clone git@github.com:commercialhaskell/all-cabal-files --branch hackage --depth=1
 git clone git@github.com:commercialhaskell/all-cabal-hashes --branch hackage --depth=1
