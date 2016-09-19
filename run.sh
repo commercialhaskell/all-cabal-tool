@@ -6,6 +6,10 @@ cd $HOME
 tar zxfv /secret/home.tar.gz
 ssh-keyscan -H github.com >> $HOME/.ssh/known_hosts
 
+source /secret-mirror/config.sh
+export AWS_ACCESS_KEY_ID
+export AWS_SECRET_ACCESS_KEY
+
 git clone git@github.com:commercialhaskell/all-cabal-files --branch hackage --depth=1
 git clone git@github.com:commercialhaskell/all-cabal-hashes --branch hackage --depth=1
 git clone git@github.com:commercialhaskell/all-cabal-metadata --depth=1

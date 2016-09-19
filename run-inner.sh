@@ -17,6 +17,11 @@ then
 
     git tag current-hackage -u D6CF60FD -m "Update from Hackage at $(date --utc --iso=sec)" -f
     git push git@github.com:commercialhaskell/all-cabal-files.git --tags --force
+
+    # Upload 00-index.tar.gz
+    git archive current-hackage --format tar -o 00-index.tar
+    gzip 00-index.tar
+    aws s3 cp 00-index.tar.gz s3://$S3_BUCKET/00-index.tar.gz
 else
     echo No changes present
 fi

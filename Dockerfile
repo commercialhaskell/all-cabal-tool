@@ -1,5 +1,12 @@
 FROM fpco/stack-run:lts-6
 
+RUN apt-get update && \
+    apt-get install python2.7 -y && \
+    curl -O https://bootstrap.pypa.io/get-pip.py && \
+    python get-pip.py && \
+    rm -f get-pip.py && \
+    pip install awscli
+
 COPY run.sh /usr/local/bin/run.sh
 COPY run-inner.sh /usr/local/bin/run-inner.sh
 
