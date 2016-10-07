@@ -26,9 +26,7 @@ import           Data.Aeson                  (FromJSON (..), ToJSON (..),
 import           Crypto.Hash                 (HashAlgorithm, MD5 (..), Digest,
                                               SHA1 (..), SHA256 (..),
                                               SHA512 (..), Skein512_512 (..))
-
--- TODO need to add some kind of verification with hackage-security,
--- once I figure out how to use that package
+import Stackage.Package.Update
 
 indexTarGz :: FilePath
 indexTarGz = "00-index.tar.gz"
@@ -47,12 +45,12 @@ run dir cmd args = do
     withCheckedProcessCleanup
         (proc cmd args) { cwd = Just dir }
         (\Inherited Inherited Inherited -> return ())
-
+{-
 allCabalFiles, allCabalHashes, allCabalMetadata :: FilePath
 allCabalFiles = "all-cabal-files"
 allCabalHashes = "all-cabal-hashes"
 allCabalMetadata = "all-cabal-metadata"
-
+-}
 ensureGitRepo :: FilePath -- ^ Dest directory
               -> String -- ^ Branch
               -> IO ()
@@ -82,14 +80,16 @@ ensureGitRepo dir branch = do
 
 main :: IO ()
 main = do
+  allCabalUpdate "https://s3.amazonaws.com/hackage.fpcomplete.com/01-index.tar.gz"
+  return ()
+    {-
     hackageRoot <- getEnv "HACKAGE_ROOT"
     indexReq <- parseRequest $ hackageRoot ++ "/00-index.tar.gz"
-
     when False $ do
         ensureGitRepo allCabalFiles "hackage"
         ensureGitRepo allCabalHashes "hackage"
         ensureGitRepo allCabalMetadata "master"
-
+    
     let loop mlastEtag = do
             putStrLn $ "Checking index, etag == " ++ tshow mlastEtag
             let req = maybe id (addRequestHeader "if-none-match")
@@ -119,7 +119,9 @@ main = do
             loop mnewEtag
 
     loop Nothing
+    -}
 
+  
 sourceEntries :: (Exception e, MonadThrow m) => Tar.Entries e -> Producer m Tar.Entry
 sourceEntries Tar.Done = return ()
 sourceEntries (Tar.Next e rest) = yield e >> sourceEntries rest
@@ -202,7 +204,8 @@ computePackage pkg ver = do
                 hashesHackage <- liftIO $ httpSink hackagereq $ const pairSink
 
                 when (hashesS3 /= hashesHackage) $
-                    error $ "Mismatched hashes between S3 and Hackage: " ++ show (pkg, ver, hashesS3, hashesHackage)
+                    error $ "Mismatched hashes between S3 and Hackage: " ++
+                            show (pkg, ver, hashesS3, hashesHackage)
 
                 return $ Just hashesS3
             403 -> do
@@ -262,7 +265,7 @@ unDigest _ = decodeUtf8 . convertToBase Base16
 
 data Package f = Package
     { packageHashes    :: Map Text Text
-    , packageLocations :: [Text] -- ^ why no ToJSON/FromJSON for Vector?
+    , packageLocations :: [Text]
     , packageSize      :: f Word64
     }
 instance ToJSON (Package Identity) where
