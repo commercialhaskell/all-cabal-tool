@@ -17,8 +17,8 @@ library
   exposed-modules:     Stackage.Package.Hashes
                      , Stackage.Package.IndexConduit
                      , Stackage.Package.Locations
-                     , Stackage.Package.Metadata
-                     , Stackage.Package.Metadata.Update
+                     --, Stackage.Package.Metadata
+                     --, Stackage.Package.Metadata.Update
                      , Stackage.Package.Update
   build-depends:       base
                      , base16-bytestring
@@ -40,6 +40,7 @@ library
                      , http-conduit
                      , http-types
                      , memory
+                     , mtl
                      , pretty
                      , resourcet
                      , tar
@@ -53,8 +54,9 @@ library
 executable all-cabal-tool
   hs-source-dirs:      app
   main-is:             Main.hs
-  ghc-options:         -threaded -rtsopts -with-rtsopts=-N
+  -- ghc-options:         -threaded -rtsopts -with-rtsopts=-N
   build-depends:       base
+                     , bytestring
                      , aeson
                      , all-cabal-tool
                      , classy-prelude-conduit

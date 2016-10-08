@@ -44,26 +44,29 @@ type M env m = (HasHttpManager env,
                 MonadIO m)
 
 
-handleEntry :: GitRepository -> CabalFileEntry -> IO ()
-handleEntry hashesRepo CabalFileEntry {..} = withManager $ do
-  exists <- liftIO $ doesFileExist cfePath
-  mpackage0 <-
+handleEntry :: M env m => GitRepository -> CabalFileEntry -> m ()
+handleEntry hashesRepo CabalFileEntry {..} = do
+  liftIO $ putStrLn $ "Handling entry for cabal file: " ++ pack cfePath
+  exists <- liftIO $ repoFileReader hashesRepo jsonfp doesFileExist
+  mpackageHashes <-
     if exists
-    then do
-      eres <- eitherDecode' <$> readFile jsonfp
-      case eres of
-        Left e -> error $ concat ["Could not parse ", jsonfp, ": ", e]
-        Right x -> return $ flatten x
-    else return Nothing
-  case mpackage0 of
-    Just package -> return ()
+      then do
+        res <- liftIO $ repoFileReader hashesRepo jsonfp readFile
+        case eitherDecode' res of
+          Left e -> error $ concat ["Could not parse ", jsonfp, ": ", e]
+          Right x -> return $ flatten x
+      else return Nothing
+  case mpackageHashes of
+    Just _ -> return ()
     Nothing -> do
-      mpackage <- computePackage cfeName cfeVersion
-      forM_ mpackage $
-          \package -> do
-            liftIO $ repoFileWriter hashesRepo jsonfp (`writeFile` encode package)
+      mpackageComputed <-
+        computePackage cfeName cfeVersion
+      case mpackageComputed of
+        Nothing -> return ()
+        Just packageHashes ->
+          liftIO $ repoFileWriter hashesRepo jsonfp (`writeFile` encode packageHashes)
   where
-    cabalfp = fromString $ cfePath
+    cabalfp = fromString cfePath
     jsonfp = dropExtension cabalfp <.> "json"
 {-
 handleEntry entry

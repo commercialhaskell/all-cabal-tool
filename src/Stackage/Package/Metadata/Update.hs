@@ -88,16 +88,27 @@ updateMetadata
      Repositories -> Map PackageName (Set Version) -> m ()
 updateMetadata repos pkgVersions =
   runResourceT $
-  CL.unfold fromVersions pkgVersions =$= CL.mapM readCabalFile $$ CL.mapM_ updatePackage
+  CL.unfold fromVersions pkgVersions =$= CL.mapM readCabalFile $$
+  CL.mapM_ (updatePackage $ allCabalMetadata repos)
   where
     fromVersions versionsMap
       | Map.null versionsMap = Nothing
       | otherwise = Just $ Map.deleteFindMin versionsMap
     readCabalFile (pkgName, versionSet) = do
       let pkgVersion = Set.findMax versionSet
+      liftIO $
+        putStrLn $
+        "<Metadata> Versions for package: " ++
+        renderDistText pkgName ++
+        " are: " ++
+        show (Set.map renderDistText versionSet) ++
+        " and chose max: " ++ renderDistText pkgVersion
       bls <-
-        liftIO $ L.readFile
-          (repoLocalPath (allCabalHashes repos) </> getCabalFilePath pkgName pkgVersion)
+        liftIO $
+        repoFileReader
+          (allCabalHashes repos)
+          (getCabalFilePath pkgName pkgVersion)
+          L.readFile
       let cabalFile = getCabalFile pkgName pkgVersion bls
       return (cabalFile, versionSet)
 
@@ -148,17 +159,17 @@ checkPreferred preferred name version =
 
 updatePackage
   :: MonadIO m
-  => (CabalFileEntry, Set Version) -> m ()
-updatePackage (cfe, allVersions) = liftIO $ withSystemTempFile "sdist.tar.gz" updatePackage'
+  => GitRepository -> (CabalFileEntry, Set Version) -> m ()
+updatePackage metadataRepo (cfe, allVersions) =
+  liftIO $ withSystemTempFile "sdist.tar.gz" updatePackage'
   where
     updatePackage' sdistFP sdistH = do
-      epi <- decodeFileEither fp
+      epi <- repoFileReader metadataRepo fp decodeFileEither
       case epi of
         Right pi
           | thehash == piHash pi && -- if cabal file changed or preferred
-                                    -- version list has been updated
-              allVersions == piAllVersions pi ->
-            return ()
+           -- version list has been updated
+              allVersions == piAllVersions pi -> return ()
         _ -> do
           putStrLn $
             concat
@@ -189,34 +200,37 @@ updatePackage (cfe, allVersions) = liftIO $ withSystemTempFile "sdist.tar.gz" up
                 runResourceT $
                 sourceTarFile sdistFP $$
                 CL.fold goEntry (pack $ description pd, "haddock", "", "")
+              putStrLn $ "Updating Metadata for package: " ++ name'
               do createDirectoryIfMissing True $ takeDirectory fp
                  let checkCond = getCheckCond gpd
                      getDeps' = getDeps checkCond
                  void $ tryAny $ removeFile fp
-                 encodeFile
+                 repoFileWriter
+                   metadataRepo
                    fp
-                   PackageInfo
-                   { piLatest = version
-                   , piHash = thehash
-                   , piAllVersions = allVersions
-                   , piSynopsis = pack $ synopsis pd
-                   , piDescription = desc
-                   , piDescriptionType = desct
-                   , piChangeLog = cl
-                   , piChangeLogType = clt
-                   , piBasicDeps =
-                     combineDeps $
-                     maybe id ((:) . getDeps') (condLibrary gpd) $
-                     map (getDeps' . snd) (condExecutables gpd)
-                   , piTestBenchDeps =
-                     combineDeps $
-                     map (getDeps' . snd) (condTestSuites gpd) ++
-                     map (getDeps' . snd) (condBenchmarks gpd)
-                   , piAuthor = pack $ author pd
-                   , piMaintainer = pack $ maintainer pd
-                   , piHomepage = pack $ homepage pd
-                   , piLicenseName = pack $ renderDistText $ license pd
-                   }
+                   (`encodeFile` PackageInfo
+                                 { piLatest = version
+                                 , piHash = thehash
+                                 , piAllVersions = allVersions
+                                 , piSynopsis = pack $ synopsis pd
+                                 , piDescription = desc
+                                 , piDescriptionType = desct
+                                 , piChangeLog = cl
+                                 , piChangeLogType = clt
+                                 , piBasicDeps =
+                                   combineDeps $
+                                   maybe id ((:) . getDeps') (condLibrary gpd) $
+                                   map (getDeps' . snd) (condExecutables gpd)
+                                 , piTestBenchDeps =
+                                   combineDeps $
+                                   map (getDeps' . snd) (condTestSuites gpd) ++
+                                   map (getDeps' . snd) (condBenchmarks gpd)
+                                 , piAuthor = pack $ author pd
+                                 , piMaintainer = pack $ maintainer pd
+                                 , piHomepage = pack $ homepage pd
+                                 , piLicenseName =
+                                   pack $ renderDistText $ license pd
+                                 })
             else putStrLn $ "Skipping: " ++ url
           return ()
     name = cfeName cfe
