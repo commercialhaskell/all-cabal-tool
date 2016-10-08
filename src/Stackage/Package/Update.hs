@@ -5,8 +5,6 @@ module Stackage.Package.Update where
 import qualified Data.ByteString as S
 import qualified Data.ByteString.Lazy as L
 import Control.Monad.IO.Class (MonadIO(liftIO))
-import System.IO (hSetBinaryMode, hClose)
-import System.IO.Temp (withSystemTempFile)
 import System.Directory
 import Data.Conduit
 import Data.Conduit.Binary (sinkHandle)
@@ -14,11 +12,10 @@ import Data.Conduit.Lazy (lazyConsume, MonadActive)
 import Data.Conduit.Zlib (ungzip)
 import qualified Data.Conduit.List as CL
 import Control.Monad.Trans.Resource
-import Network.HTTP.Simple (parseRequest, httpSink)
 import Network.HTTP.Client.Conduit
 import Stackage.Package.IndexConduit
 import Stackage.Package.Locations
---import Stackage.Package.Metadata.Update
+import Stackage.Package.Metadata.Update
 import Stackage.Package.Hashes
 
 import qualified Codec.Archive.Tar as Tar
@@ -26,19 +23,20 @@ import Debug.Trace
 
 updateCabalFiles
   :: MonadIO m
-  => Repositories -> Conduit CabalFileEntry m CabalFileEntry
+  => Repositories -> Conduit IndexFileEntry m IndexFileEntry
 updateCabalFiles Repositories {..} = CL.mapM handleFileEntry where
-  handleFileEntry entry@(CabalFileEntry {..}) = do
-    liftIO $ putStrLn $ "Writing all-cabal-files: " ++ cfePath
-    liftIO $ repoFileWriter allCabalFiles cfePath (`L.writeFile` cfeRaw)
+  handleFileEntry entry = do
+    --liftIO $ putStrLn $ "Writing all-cabal-files: " ++ cfePath
+    --liftIO $ repoFileWriter allCabalFiles cfePath (`L.writeFile` cfeRaw)
     return entry
 
 
 updateCabalHashes
-  :: MonadIO m
-  => Repositories -> Conduit CabalFileEntry m CabalFileEntry
-updateCabalHashes Repositories {..} = CL.mapM handleFileEntry where
+  :: M env m
+  => Repositories -> Conduit IndexFileEntry m IndexFileEntry
+updateCabalHashes repos = CL.mapM handleFileEntry where
   handleFileEntry entry = do
+    handleEntry (allCabalHashes repos) entry
     --liftIO $ putStrLn $ "Writing all-cabal-hashes: " ++ cfePath
     --liftIO $ repoFileWriter allCabalHashes cfePath (`L.writeFile` cfeRaw)
     --liftIO $ putStrLn $ "Handling entry all-cabal-hashes for: " ++ cfePath
@@ -66,9 +64,11 @@ allCabalUpdate :: (MonadActive m, M env m) => Source m S.ByteString -> m ()
 allCabalUpdate tarball = do
   repos <- liftIO getRepos
   entries <- Tar.read . L.fromChunks <$> lazyConsume tarball
-  sourceEntries entries =$= cabalFileConduit =$=
-    CL.mapM (handleEntry (allCabalHashes repos)) $$
-    CL.sinkNull
+  packageVersions <- sourceEntries entries =$= indexFileEntryConduit =$=
+                     updateCabalHashes repos $$ -- CL.sinkNull
+                     sinkPackageVersions
+  updateMetadata repos packageVersions
+  return ()
 
 
 {-

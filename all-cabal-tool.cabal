@@ -17,8 +17,8 @@ library
   exposed-modules:     Stackage.Package.Hashes
                      , Stackage.Package.IndexConduit
                      , Stackage.Package.Locations
-                     --, Stackage.Package.Metadata
-                     --, Stackage.Package.Metadata.Update
+                     , Stackage.Package.Metadata
+                     , Stackage.Package.Metadata.Update
                      , Stackage.Package.Update
   build-depends:       base
                      , base16-bytestring

@@ -1,3 +1,4 @@
+{-# LANGUAGE NamedFieldPuns #-}
 {-# LANGUAGE RecordWildCards #-}
 {-# LANGUAGE ConstraintKinds #-}
 {-# LANGUAGE FlexibleContexts #-}
@@ -44,9 +45,12 @@ type M env m = (HasHttpManager env,
                 MonadIO m)
 
 
-handleEntry :: M env m => GitRepository -> CabalFileEntry -> m ()
-handleEntry hashesRepo CabalFileEntry {..} = do
-  liftIO $ putStrLn $ "Handling entry for cabal file: " ++ pack cfePath
+
+createHashesIfMissing
+  :: M env m
+  => GitRepository -> PackageName -> Version -> m (Maybe (Package Identity))
+createHashesIfMissing hashesRepo pkgName pkgVersion = do
+  let jsonfp = dropExtension (getCabalFilePath pkgName pkgVersion) <.> "json"
   exists <- liftIO $ repoFileReader hashesRepo jsonfp doesFileExist
   mpackageHashes <-
     if exists
@@ -57,17 +61,42 @@ handleEntry hashesRepo CabalFileEntry {..} = do
           Right x -> return $ flatten x
       else return Nothing
   case mpackageHashes of
-    Just _ -> return ()
+    Just packageHashes -> return $ Just packageHashes
     Nothing -> do
-      mpackageComputed <-
-        computePackage cfeName cfeVersion
+      mpackageComputed <- computePackage pkgName pkgVersion
       case mpackageComputed of
-        Nothing -> return ()
-        Just packageHashes ->
-          liftIO $ repoFileWriter hashesRepo jsonfp (`writeFile` encode packageHashes)
-  where
-    cabalfp = fromString cfePath
-    jsonfp = dropExtension cabalfp <.> "json"
+        Nothing -> return Nothing
+        Just packageHashes -> do
+          liftIO $
+            repoFileWriter hashesRepo jsonfp (`writeFile` encode packageHashes)
+          return $ Just packageHashes
+
+
+
+handleEntry
+  :: M env m
+  => GitRepository -> IndexFileEntry -> m ()
+-- update cabal file with latest version and then compute package hashes if
+-- missing
+handleEntry hashesRepo (CabalFileEntry IndexFile {ifPackageVersion = Just pkgVersion
+                                                 ,..}) = do
+  liftIO $ repoFileWriter hashesRepo ifPath (`writeFile` ifRaw)
+  void $ createHashesIfMissing hashesRepo ifPackageName pkgVersion
+-- Handle a possiblity of malformed 'package.json' file
+handleEntry hashesRepo (HashesFileEntry IndexFile {ifParsed = Left err, ifPath}) = return ()
+  --liftIO $
+  --  hPutStrLn stderr $ "AllCabalHashes: There was an issue parsing: " ++ ifPath
+-- create hashes if not present yet and validate that values do agree.
+handleEntry hashesRepo (HashesFileEntry IndexFile {ifPackageVersion = Just pkgVersion
+                                                  ,ifParsed = Right hashes, ..}) = do
+  packageHashes <- createHashesIfMissing hashesRepo ifPackageName pkgVersion
+  -- TODO: validate that computed hashes match ones from hackage.
+  return ()
+-- Write preferred versions file
+handleEntry hashesRepo (PreferredVersionsEntry IndexFile {..}) = do
+  liftIO $ repoFileWriter hashesRepo ifPath (`writeFile` ifRaw)
+handleEntry _ _ = return ()
+  
 {-
 handleEntry entry
   | takeFileName (Tar.entryPath entry) == "preferred-versions"

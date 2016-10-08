@@ -1,3 +1,4 @@
+{-# LANGUAGE RecordWildCards #-}
 {-# LANGUAGE FlexibleContexts #-}
 {-# LANGUAGE DeriveGeneric #-}
 {-# LANGUAGE OverloadedStrings #-}
@@ -20,6 +21,7 @@ import qualified Data.ByteString.Lazy as L
 import Conduit
 import qualified Data.Conduit.List as CL
 import Data.Aeson as A (encode)
+import Data.Foldable (msum)
 import Data.Map (Map)
 import qualified Data.Map as Map
 import Data.Maybe (fromMaybe)
@@ -55,7 +57,7 @@ import System.Directory
        (createDirectoryIfMissing, doesFileExist, removeFile)
 import System.FilePath
        (splitExtension, takeDirectory, takeFileName, takeExtension, (<.>), (</>))
-import System.IO (hClose)
+import System.IO -- (hSetBinaryMode, hClose)
 import System.IO.Temp
 import Data.Conduit.Zlib (ungzip)
 
@@ -64,53 +66,65 @@ import Stackage.Package.Metadata
 import Stackage.Package.IndexConduit
 import Stackage.Package.Locations
 
-
+-- | Collects all available package versions along with preferred versions if
+-- such are provided.
 sinkPackageVersions
   :: Monad m
-  => PreferredInfo
-  -> Consumer CabalFileEntry m (Map PackageName (Set Version))
-sinkPackageVersions preferredInfo = CL.fold keepPreferred Map.empty
+  => Consumer IndexFileEntry m (Map PackageName (Set Version, Maybe VersionRange))
+sinkPackageVersions = CL.fold trackVersions Map.empty
   where
-    keepPreferred newestMap cfe =
-      let pkgName = cfeName cfe
-          pkgVersion = cfeVersion cfe
-      in if checkPreferred preferredInfo pkgName pkgVersion
-           then flip (Map.insert pkgName) newestMap $
-                case Map.lookup pkgName newestMap of
-                  Nothing -> Set.singleton pkgVersion
-                  Just versionsSet -> Set.insert pkgVersion versionsSet
-                -- Skip the deprecated package version
-           else newestMap
-
+    updateVersionSetMap (newSet, _) (oldSet, moldRange) =
+      (Set.union newSet oldSet, moldRange)
+    -- in case that new range is Nothing, previos range is cleared.
+    updateVersionRangeMap (_, mnewRange) (oldSet, _) = (oldSet, mnewRange)
+    trackVersions versionsMap (PreferredVersionsEntry IndexFile {..}) =
+      Map.insertWith updateVersionRangeMap ifPackageName (Set.empty, ifParsed) versionsMap
+    trackVersions versionsMap (CabalFileEntry IndexFile {ifPackageVersion = Just pkgVersion
+                                                        ,..}) =
+      Map.insertWith
+        updateVersionSetMap
+        ifPackageName
+        (Set.singleton pkgVersion, Nothing)
+        versionsMap
+    trackVersions versionsMap _ = versionsMap
 
 updateMetadata
   :: (MonadBaseControl IO m, MonadIO m) =>
-     Repositories -> Map PackageName (Set Version) -> m ()
-updateMetadata repos pkgVersions =
+     Repositories -> Map PackageName (Set Version, Maybe VersionRange) -> m ()
+updateMetadata repos pkgVersions = do
+  let fromVersions versionsMap
+        | Map.null versionsMap = Nothing
+        | otherwise = Just $ Map.deleteFindMin versionsMap
+  let readCabalFile (pkgName, (versionSet, mversionRange)) = do
+        let preferredVersionSet =
+              case mversionRange of
+                Nothing -> versionSet
+                Just range -> Set.filter (`withinRange` range) versionSet
+        -- "From Hackage: If all the available versions of a package are
+        -- non-preferred or deprecated, cabal-install will treat this the same
+        -- as if none of them are."
+        let preferredVersionSetNonEmpty =
+              if Set.null preferredVersionSet
+                then versionSet
+                else preferredVersionSet
+        let pkgVersion = Set.findMax preferredVersionSetNonEmpty
+        when (Set.null preferredVersionSet) $
+          liftIO $
+          putStrLn $
+          "Info: Package preferred version set is empty: " ++
+          renderDistText pkgName ++
+          ". Using all available versions for metadata."
+        bls <-
+          liftIO $
+          repoFileReader
+            (allCabalHashes repos)
+            (getCabalFilePath pkgName pkgVersion)
+            L.readFile
+        return
+          (getCabalFile pkgName pkgVersion bls, preferredVersionSetNonEmpty)
   runResourceT $
-  CL.unfold fromVersions pkgVersions =$= CL.mapM readCabalFile $$
-  CL.mapM_ (updatePackage $ allCabalMetadata repos)
-  where
-    fromVersions versionsMap
-      | Map.null versionsMap = Nothing
-      | otherwise = Just $ Map.deleteFindMin versionsMap
-    readCabalFile (pkgName, versionSet) = do
-      let pkgVersion = Set.findMax versionSet
-      liftIO $
-        putStrLn $
-        "<Metadata> Versions for package: " ++
-        renderDistText pkgName ++
-        " are: " ++
-        show (Set.map renderDistText versionSet) ++
-        " and chose max: " ++ renderDistText pkgVersion
-      bls <-
-        liftIO $
-        repoFileReader
-          (allCabalHashes repos)
-          (getCabalFilePath pkgName pkgVersion)
-          L.readFile
-      let cabalFile = getCabalFile pkgName pkgVersion bls
-      return (cabalFile, versionSet)
+    CL.unfold fromVersions pkgVersions =$= CL.mapM readCabalFile $$
+    CL.mapM_ (updatePackageIfChanged $ allCabalMetadata repos)
 
 
 -- | Download 'packages/deprecated.json' file from Hackage, parse it and save it
@@ -133,115 +147,105 @@ saveDeprecated repos = do
               = repoFileWriter repo filename (`S.writeFile` bs)
        writeAs (toLower $ pack $ takeExtension filename))
 
-type PreferredInfo = Map PackageName VersionRange
 
-loadPreferredInfo :: IO PreferredInfo
-loadPreferredInfo = do
-  preferredReq <- parseRequest hackagePreferredUrl
-  bs <- httpSink preferredReq $ const foldC
-  singletons <- mapM parse $ S8.lines bs
-  return $ Map.unions singletons
-  where
-    parse bs
-      | "--" `S.isPrefixOf` bs = return Map.empty
-      | S.null bs = return Map.empty
-      | otherwise = do
-        let (name', range') = break (== ' ') $ S8.unpack bs
-        case (,) <$> parseDistText name' <*> parseDistText range' of
-          Nothing -> error $ "Invalid preferred info line: " ++ show bs
-          Just (name, range) -> return $ Map.singleton name range
-
-checkPreferred :: PreferredInfo -> PackageName -> Version -> Bool
-checkPreferred preferred name version =
-  case Map.lookup name preferred of
-    Nothing -> True
-    Just range -> version `withinRange` range
-
-updatePackage
+updatePackageIfChanged
   :: MonadIO m
-  => GitRepository -> (CabalFileEntry, Set Version) -> m ()
-updatePackage metadataRepo (cfe, allVersions) =
-  liftIO $ withSystemTempFile "sdist.tar.gz" updatePackage'
-  where
-    updatePackage' sdistFP sdistH = do
-      epi <- repoFileReader metadataRepo fp decodeFileEither
-      case epi of
-        Right pi
-          | thehash == piHash pi && -- if cabal file changed or preferred
-           -- version list has been updated
-              allVersions == piAllVersions pi -> return ()
-        _ -> do
+  => GitRepository -> (CabalFile, Set Version) -> m ()
+updatePackageIfChanged _ (IndexFile {ifParsed = ParseFailed pe, ..}, _) =
+                             error $ show (ifPackageName, ifPackageVersion, pe)
+updatePackageIfChanged metadataRepo (IndexFile {ifParsed = ParseOk _ gpd
+                                               ,..}, versionSet) = do
+  epi <- liftIO $ repoFileReader metadataRepo fp decodeFileEither
+  when (Just pkgVersion /= ifPackageVersion) $
+    error $
+    "Internal error, metadata package update version mismatch: " ++
+    show (ifPackageName, ifPackageVersion, pkgVersion)
+  when (package pd /= PackageIdentifier ifPackageName pkgVersion) $
+    error $
+    show ("mismatch" :: String, ifPackageName, ifPackageVersion, package pd)
+  case epi of
+    Right pi
+    -- cabal file is the same and version preference list hasn't changed.
+      | cabalHash == piHash pi && versionSet == piAllVersions pi -> return ()
+    Right pi
+    -- TODO: current version hasn't changed, hence data in the sdist.tar.gz is
+    -- stil the same, updating cabal related info only.
+      | pkgVersion == piLatest pi -> do
+        liftIO $
           putStrLn $
-            concat
-              ["Loading ", renderDistText name, "-", renderDistText version]
-          gpd <-
-            case mgpd of
-              ParseFailed pe -> error $ show (name, version, pe)
-              ParseOk _ gpd -> return gpd
-          let pd = packageDescription gpd
-          when (package pd /= PackageIdentifier name version) $
-            error $ show ("mismatch" :: String, name, version, package pd)
-          let name'' = renderDistText name
-              version' = renderDistText version
-          let url =
-                concat
-                  [ "https://s3.amazonaws.com/hackage.fpcomplete.com/package/"
-                  , name''
-                  , "-"
-                  , version'
-                  , ".tar.gz"
-                  ]
-          req <- parseRequest url
-          res <- httpSink req $ \res -> sinkHandle sdistH >> return res
-          hClose sdistH
-          if getResponseStatus res == status200
-            then do
-              (desc, desct, cl, clt) <-
-                runResourceT $
-                sourceTarFile sdistFP $$
-                CL.fold goEntry (pack $ description pd, "haddock", "", "")
-              putStrLn $ "Updating Metadata for package: " ++ name'
-              do createDirectoryIfMissing True $ takeDirectory fp
-                 let checkCond = getCheckCond gpd
-                     getDeps' = getDeps checkCond
-                 void $ tryAny $ removeFile fp
-                 repoFileWriter
-                   metadataRepo
-                   fp
-                   (`encodeFile` PackageInfo
-                                 { piLatest = version
-                                 , piHash = thehash
-                                 , piAllVersions = allVersions
-                                 , piSynopsis = pack $ synopsis pd
-                                 , piDescription = desc
-                                 , piDescriptionType = desct
-                                 , piChangeLog = cl
-                                 , piChangeLogType = clt
-                                 , piBasicDeps =
-                                   combineDeps $
-                                   maybe id ((:) . getDeps') (condLibrary gpd) $
-                                   map (getDeps' . snd) (condExecutables gpd)
-                                 , piTestBenchDeps =
-                                   combineDeps $
-                                   map (getDeps' . snd) (condTestSuites gpd) ++
-                                   map (getDeps' . snd) (condBenchmarks gpd)
-                                 , piAuthor = pack $ author pd
-                                 , piMaintainer = pack $ maintainer pd
-                                 , piHomepage = pack $ homepage pd
-                                 , piLicenseName =
-                                   pack $ renderDistText $ license pd
-                                 })
-            else putStrLn $ "Skipping: " ++ url
-          return ()
-    name = cfeName cfe
-    version = cfeVersion cfe
-    lbs = cfeRaw cfe
-    mgpd = cfeParsed cfe
+          "TODO: Package metadata should be updated: " ++ pkgNameStr ++ "-" ++ pkgVersionStr
+        return ()
+    -- Version update or a totally new package.
+    _ -> liftIO $ withSystemTempFile "sdist.tar.gz" updatePackage
+  where
+    pkgNameStr = renderDistText ifPackageName
+    pkgVersionStr = renderDistText pkgVersion
+    pkgVersion = Set.findMax versionSet
+    pd = packageDescription gpd
+    url =
+      concat
+        [ "https://s3.amazonaws.com/hackage.fpcomplete.com/package/"
+        , pkgNameStr
+        , "-"
+        , pkgVersionStr
+        , ".tar.gz"
+        ]
+    updatePackage sdistFP sdistH = do
+      hSetBinaryMode sdistH True
+      putStrLn $
+        concat
+          [ "Loading "
+          , renderDistText ifPackageName
+          , "-"
+          , renderDistText pkgVersion
+          ]
+      req <- parseRequest url
+      res <- httpSink req $ \res -> sinkHandle sdistH >> return res
+      hClose sdistH
+      if getResponseStatus res == status200
+        then do
+          (desc, desct, cl, clt) <-
+            runResourceT $
+            sourceTarFile True sdistFP $$
+            CL.fold goEntry (pack $ description pd, "haddock", "", "")
+          putStrLn $
+            "Updating Metadata for package: " ++
+            pkgNameStr ++ " to version: " ++ pkgVersionStr
+          let checkCond = getCheckCond gpd
+              getDeps' = getDeps checkCond
+          repoFileWriter metadataRepo fp (void . tryAny . removeFile)
+          repoFileWriter
+            metadataRepo
+            fp
+            (`encodeFile` PackageInfo
+                          { piLatest = pkgVersion
+                          , piHash = cabalHash
+                          , piAllVersions = versionSet
+                          , piSynopsis = pack $ synopsis pd
+                          , piDescription = desc
+                          , piDescriptionType = desct
+                          , piChangeLog = cl
+                          , piChangeLogType = clt
+                          , piBasicDeps =
+                            combineDeps $
+                            maybe id ((:) . getDeps') (condLibrary gpd) $
+                            map (getDeps' . snd) (condExecutables gpd)
+                          , piTestBenchDeps =
+                            combineDeps $
+                            map (getDeps' . snd) (condTestSuites gpd) ++
+                            map (getDeps' . snd) (condBenchmarks gpd)
+                          , piAuthor = pack $ author pd
+                          , piMaintainer = pack $ maintainer pd
+                          , piHomepage = pack $ homepage pd
+                          , piLicenseName = pack $ renderDistText $ license pd
+                          })
+        else putStrLn $ "Skipping: " ++ url
+      return ()
     fp =
-      "packages" </> (unpack $ toLower $ pack $ take 2 $ name' ++ "XX") </> name' <.>
+      "packages" </> (unpack $ toLower $ pack $ take 2 $ pkgNameStr ++ "XX") </>
+      pkgNameStr <.>
       "yaml"
-    name' = renderDistText name
-    thehash = unDigest SHA256 $ hashlazy lbs
+    cabalHash = unDigest SHA256 $ hashlazy ifRaw
     goEntry :: (Text, Text, Text, Text) -> Tar.Entry -> (Text, Text, Text, Text)
     goEntry orig@(desc, desct, cl, clt) e =
       case (toEntryType $ Tar.entryPath e, toText $ Tar.entryContent e) of

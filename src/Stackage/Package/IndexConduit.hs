@@ -1,16 +1,19 @@
 {-# LANGUAGE FlexibleContexts #-}
+{-# LANGUAGE OverloadedStrings #-}
 {-# LANGUAGE RankNTypes #-}
 {-# LANGUAGE ViewPatterns #-}
 
 module Stackage.Package.IndexConduit
   ( sourceTarFile
-  , sourceAllCabalFiles
   , parseDistText
   , renderDistText
   , getCabalFilePath
   , getCabalFile
-  , cabalFileConduit, sourceEntries
-  , CabalFileEntry(..)
+  , indexFileEntryConduit, sourceEntries
+  , IndexFile(..)
+  , IndexFileEntry(..)
+  , CabalFile
+  , HackageHashesFile
   ) where
 
 import qualified Codec.Archive.Tar as Tar
@@ -18,7 +21,9 @@ import Codec.Compression.GZip (decompress)
 import Control.Monad (guard)
 import Control.Monad.IO.Class (liftIO)
 import Control.Monad.Trans.Resource (MonadResource, throwM)
+import Data.Aeson as A
 import qualified Data.ByteString.Lazy as L
+import qualified Data.ByteString.Lazy.Char8 as L8
 import Data.Conduit -- (Producer, bracketP, yield, (=$=))
 import Data.Conduit.Lazy (lazyConsume)
 import qualified Data.Conduit.List as CL
@@ -27,12 +32,14 @@ import Data.Text.Encoding.Error (lenientDecode)
 import qualified Data.Text.Lazy as TL
 import Data.Text.Lazy.Encoding (decodeUtf8With)
 import Data.Version (Version)
+import Data.Word (Word64)
 import Distribution.Compat.ReadP (readP_to_S)
 import Distribution.Package (PackageName)
 import Distribution.PackageDescription (GenericPackageDescription)
 import Distribution.PackageDescription.Parse
        (ParseResult, parsePackageDescription)
 import Distribution.Text (disp, parse)
+import Distribution.Version (VersionRange)
 import qualified Distribution.Text
 import System.FilePath ((</>), (<.>))
 import System.IO (IOMode(ReadMode), hClose, openBinaryFile)
@@ -41,17 +48,18 @@ import Debug.Trace
 
 sourceTarFile
   :: MonadResource m
-  => FilePath
+  => Bool
+  -> FilePath
   -> Producer m Tar.Entry
-sourceTarFile fp = do
+sourceTarFile toUngzip fp = do
   bracketP (openBinaryFile fp ReadMode) hClose $
     \h -> do
       lbs <- liftIO $ L.hGetContents h
-      loop $ Tar.read lbs
+      sourceEntries $ Tar.read $ ungzip' lbs
   where
-    loop Tar.Done = return ()
-    loop (Tar.Fail e) = throwM e
-    loop (Tar.Next e es) = yield e >> loop es
+    ungzip'
+        | toUngzip = decompress
+        | otherwise = id
 
 
 --sourceTarball :: Source m S.ByteString -> Conduit S.ByteString m Tar.Entry
@@ -65,7 +73,28 @@ sourceEntries (Tar.Fail e) = throwM e
 
 
 
+data IndexFile p = IndexFile
+    { ifPackageName    :: !PackageName
+    , ifPackageVersion :: !(Maybe Version)
+    , ifFileName       :: !FilePath
+    , ifPath           :: !FilePath
+    , ifRaw            :: L.ByteString
+    , ifParsed         :: p
+    }
 
+
+data HackageHashes = HackageHashes
+  { hHashes :: [String]
+  , hLength :: Word64
+  }
+
+instance FromJSON HackageHashes where
+  parseJSON = withObject "Package hash values from Hackage" $
+              \ o -> HackageHashes
+                     <$> o .: "hashes"
+                     <*> o .: "length"
+
+{-
 data CabalFileEntry = CabalFileEntry
   { cfeName :: !PackageName
   , cfeVersion :: !Version
@@ -73,6 +102,20 @@ data CabalFileEntry = CabalFileEntry
   , cfeRaw :: L.ByteString
   , cfeParsed :: ParseResult GenericPackageDescription
   }
+-}
+
+type CabalFile = IndexFile (ParseResult GenericPackageDescription)
+
+type HackageHashesFile = IndexFile (Either String HackageHashes)
+
+-- | Versions file can be empty, which means preference list was cleared.
+type PreferredVersionsFile = IndexFile (Maybe VersionRange)
+
+data IndexFileEntry
+  = CabalFileEntry CabalFile
+  | HashesFileEntry HackageHashesFile
+  | PreferredVersionsEntry PreferredVersionsFile
+  | UnrecognizedEntry (IndexFile ())
 
 
 getCabalFilePath :: PackageName -> Version -> FilePath
@@ -80,14 +123,15 @@ getCabalFilePath (renderDistText -> pkgName) (renderDistText -> pkgVersion) =
   pkgName </> pkgVersion </> pkgName <.> "cabal"
 
   
-getCabalFile :: PackageName -> Version -> L.ByteString -> CabalFileEntry
+getCabalFile :: PackageName -> Version -> L.ByteString -> CabalFile
 getCabalFile pkgName pkgVersion lbs =
-  CabalFileEntry
-  { cfeName = pkgName
-  , cfeVersion = pkgVersion
-  , cfePath = getCabalFilePath pkgName pkgVersion
-  , cfeRaw = lbs
-  , cfeParsed =
+  IndexFile
+  { ifPackageName = pkgName
+  , ifPackageVersion = Just pkgVersion
+  , ifFileName = renderDistText pkgName <.> "cabal"
+  , ifPath = getCabalFilePath pkgName pkgVersion
+  , ifRaw = lbs
+  , ifParsed =
     parsePackageDescription $
     TL.unpack $ dropBOM $ decodeUtf8With lenientDecode lbs
   }
@@ -95,34 +139,55 @@ getCabalFile pkgName pkgVersion lbs =
   where
     dropBOM t = fromMaybe t $ TL.stripPrefix (TL.pack "\xFEFF") t
 
-sourceAllCabalFiles
-  :: MonadResource m
-  => FilePath -> Producer m CabalFileEntry
-sourceAllCabalFiles indexTar = 
-  sourceTarFile indexTar =$= CL.mapMaybe go
+
+indexFileEntryConduit :: Monad m => Conduit Tar.Entry m IndexFileEntry
+indexFileEntryConduit = CL.mapMaybe getIndexFileEntry
   where
-    go e =
-      case (toPkgVer $ Tar.entryPath e, Tar.entryContent e) of
-        (Just (name', versions', name, version), Tar.NormalFile lbs _) ->
-          Just (getCabalFile name version lbs ) { cfePath = Tar.entryPath e }
+    getIndexFileEntry e@(Tar.entryContent -> Tar.NormalFile lbs _) =
+      case (toPkgVer $ Tar.entryPath e) of
+        Just (pkgName, Nothing, fileName@"preferred-versions") ->
+          Just $
+          PreferredVersionsEntry $
+          IndexFile
+          { ifPackageName = pkgName
+          , ifPackageVersion = Nothing
+          , ifFileName = fileName
+          , ifPath = Tar.entryPath e
+          , ifRaw = lbs
+          , ifParsed = pkgVersionRange
+          }
+          where (pkgNameStr, range) = break (== ' ') $ L8.unpack lbs
+                pkgVersionRange = do
+                  pkgVersionRange <- parseDistText range
+                  pkgName' <- parseDistText pkgNameStr
+                  guard (pkgName == pkgName')
+                  Just pkgVersionRange
+        Just (pkgName, Just pkgVersion, fileName@"package.json") ->
+          Just $
+          HashesFileEntry $
+          IndexFile
+          { ifPackageName = pkgName
+          , ifPackageVersion = Just pkgVersion
+          , ifFileName = fileName
+          , ifPath = Tar.entryPath e
+          , ifRaw = lbs
+          , ifParsed = A.eitherDecode lbs
+          }
+        Just (pkgName, Just pkgVersion, fileName)
+          | getCabalFilePath pkgName pkgVersion == Tar.entryPath e ->
+            Just $ CabalFileEntry $ getCabalFile pkgName pkgVersion lbs
+        Just (pkgName, mpkgVersion, fileName) ->
+          Just $
+          UnrecognizedEntry $
+          IndexFile
+          { ifPackageName = pkgName
+          , ifPackageVersion = mpkgVersion
+          , ifFileName = fileName
+          , ifPath = Tar.entryPath e
+          , ifRaw = lbs
+          , ifParsed = ()
+          }
         _ -> Nothing
-    toPkgVer s0 = do
-      (name', '/':s1) <- Just $ break (== '/') s0
-      (version', '/':s2) <- Just $ break (== '/') s1
-      guard $ s2 == (name' ++ ".cabal")
-      name <- parseDistText name'
-      version <- parseDistText version'
-      Just (name', version', name, version)
-
-
-cabalFileConduit :: Monad m => Conduit Tar.Entry m CabalFileEntry
-cabalFileConduit =
-  CL.mapMaybe (\e -> getFileEntry e (toPkgVer $ Tar.entryPath e))
-  where
-    getFileEntry e@(Tar.entryContent -> Tar.NormalFile lbs _) (Just (pkgName, Just pkgVersion, fileName))
-      | getCabalFilePath pkgName pkgVersion == Tar.entryPath e =
-        Just $ getCabalFile pkgName pkgVersion lbs
-      | otherwise = Nothing
     getFileEntry _ _ = Nothing
     toPkgVer s0 = do
       (pkgName', '/':s1) <- Just $ break (== '/') s0
@@ -130,9 +195,10 @@ cabalFileConduit =
       (mpkgVersion, fileName) <-
         case break (== '/') s1 of
           (fName, []) -> Just (Nothing, fName)
-          (pkgVersion', '/':s2) -> do
+          (pkgVersion', '/':fName) -> do
+            guard ('/' `notElem` fName)
             pkgVersion <- parseDistText pkgVersion'
-            return $ (Just pkgVersion, s2)
+            return $ (Just pkgVersion, fName)
       return (pkgName, mpkgVersion, fileName)
 
 parseDistText
