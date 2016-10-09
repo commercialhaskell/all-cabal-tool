@@ -11,7 +11,6 @@
 module Stackage.Package.Hashes where
 
 import ClassyPrelude.Conduit
-import qualified Codec.Archive.Tar as Tar
 import Data.ByteArray.Encoding (convertToBase, Base(Base16))
 import Crypto.Hash
        (HashAlgorithm, MD5(..), SHA1(..), SHA256(..), SHA512(..),
@@ -21,32 +20,70 @@ import Data.Version (Version)
 import Data.Aeson
        (FromJSON(..), ToJSON(..), eitherDecode', encode, object,
         withObject, (.:), (.:?), (.=))
-import qualified Data.ByteString.Base16 as B16
-import Data.Conduit.Lazy (lazyConsume)
-import Data.Conduit.Zlib (ungzip)
 import qualified Data.Map as Map
 import Distribution.Package (PackageName)
-import qualified Data.Text.Lazy.Builder.Int
 import Network.HTTP.Client.Conduit
        (HasHttpManager, HttpException(StatusCodeException), checkStatus,
         parseRequest, responseBody, responseCookieJar, responseHeaders,
-        responseStatus, withManager, withResponse)
+        responseStatus, withResponse)
 import Network.HTTP.Types (statusCode)
 import System.Directory
-import System.FilePath (dropExtension, takeDirectory, takeFileName)
+import System.FilePath (dropExtension)
 
 import Stackage.Package.Locations
 import Stackage.Package.IndexConduit
 
+type M env m = (HasHttpManager env, MonadThrow m, MonadBaseControl IO m, MonadReader env m, MonadIO m)
 
-type M env m = (HasHttpManager env,
-                MonadThrow m,
-                MonadBaseControl IO m,
-                MonadReader env m,
-                MonadIO m)
+-- | Performs an update per package version:
+--
+-- * updates the .cabal file checks if hash file is present and matches the
+-- * hashes in 'package.json'. Calculates it if is not present.
+entryUpdateHashes
+  :: M env m
+  => GitRepository -> IndexFileEntry -> m ()
+-- update cabal file with latest version and then compute package hashes if
+-- missing
+entryUpdateHashes hashesRepo (CabalFileEntry IndexFile {ifPackageVersion = Just pkgVersion
+                                                       ,..}) = do
+  liftIO $ repoFileWriter hashesRepo ifPath (`writeFile` ifRaw)
+  -- TODO: Line below is likely unnecessary, since each cabal has a
+  -- corresponding 'package.json' file, which is handled by the next case
+  -- anyways.
+  void $ createHashesIfMissing hashesRepo ifPackageName pkgVersion
+-- Handle a possiblity of malformed 'package.json' file
+entryUpdateHashes _ (HashesFileEntry IndexFile {ifParsed = Left err
+                                               ,ifPath}) =
+  liftIO $
+  hPutStrLn stderr $
+  "Stackage.Hackage.Hashes.entryUpdateHashes: There was an issue parsing: " ++
+  ifPath ++ ". Parsing error: " ++ err
+-- create hashes if not present yet and validate that values with Hackage do agree.
+entryUpdateHashes hashesRepo (HashesFileEntry IndexFile {ifPackageVersion = Just pkgVersion
+                                                        ,ifParsed = Right hackageHashes
+                                                        ,..}) = do
+  mpackage <- createHashesIfMissing hashesRepo ifPackageName pkgVersion
+  case mpackage of
+    Nothing -> return ()
+    Just package -> mapM_ checkHash [tshow MD5, tshow SHA256]
+      where checkHash hashType =
+              unless
+                (Map.lookup (toLower hashType) (hHashes hackageHashes) ==
+                 Map.lookup hashType (packageHashes package))
+                (error $
+                 "Hash " ++
+                 unpack hashType ++
+                 "value mismatch for: '" ++
+                 getPackageFullName ifPackageName pkgVersion ++
+                 "' computed vs one from Hackage.")
+  return ()
+-- Write preferred versions file
+entryUpdateHashes hashesRepo (PreferredVersionsEntry IndexFile {..}) = do
+  liftIO $ repoFileWriter hashesRepo ifPath (`writeFile` ifRaw)
+entryUpdateHashes _ _ = return ()
 
-
-
+-- | If json file with package hashes is missing or corrupt (not parsable) it
+-- downloads the taralls with source code and saves their the hashes.
 createHashesIfMissing
   :: M env m
   => GitRepository -> PackageName -> Version -> m (Maybe (Package Identity))
@@ -72,49 +109,6 @@ createHashesIfMissing hashesRepo pkgName pkgVersion = do
             repoFileWriter hashesRepo jsonfp (`writeFile` encode packageHashes)
           return $ Just packageHashes
 
-
-entryUpdateHashes
-  :: M env m
-  => GitRepository -> IndexFileEntry -> m ()
--- update cabal file with latest version and then compute package hashes if
--- missing
-entryUpdateHashes hashesRepo (CabalFileEntry IndexFile {ifPackageVersion = Just pkgVersion
-                                                       ,..}) = do
-  liftIO $ repoFileWriter hashesRepo ifPath (`writeFile` ifRaw)
-  -- TODO: Line below is likely unnecessary, since each cabal has a
-  -- corresponding 'package.json' file, which is handled by the next case
-  -- anyways.
-  void $ createHashesIfMissing hashesRepo ifPackageName pkgVersion
--- Handle a possiblity of malformed 'package.json' file
-entryUpdateHashes hashesRepo (HashesFileEntry IndexFile {ifParsed = Left err
-                                                        ,ifPath}) =
-  liftIO $
-  hPutStrLn stderr $ "AllCabalHashes: There was an issue parsing: " ++ ifPath
--- create hashes if not present yet and validate that values with Hackage do agree.
-entryUpdateHashes hashesRepo (HashesFileEntry IndexFile {ifPackageVersion = Just pkgVersion
-                                                        ,ifParsed = Right hackageHashes
-                                                        ,..}) = do
-  mpackage <- createHashesIfMissing hashesRepo ifPackageName pkgVersion
-  case mpackage of
-    Nothing -> return ()
-    Just package -> mapM_ checkHash [tshow MD5, tshow SHA256]
-      where checkHash hashType =
-              unless
-                (Map.lookup (toLower hashType) (hHashes hackageHashes) ==
-                 Map.lookup hashType (packageHashes package))
-                (error $
-                 "Hash " ++
-                 unpack hashType ++
-                 "value mismatch for: '" ++
-                 getPackageFullName ifPackageName pkgVersion ++
-                 "' computed vs one from Hackage.")
-  return ()
--- Write preferred versions file
-entryUpdateHashes hashesRepo (PreferredVersionsEntry IndexFile {..}) = do
-  liftIO $ repoFileWriter hashesRepo ifPath (`writeFile` ifRaw)
-entryUpdateHashes _ _ = return ()
-
-
 -- | Kinda like sequence, except not.
 flatten :: Package Maybe -> Maybe (Package Identity)
 flatten (Package h l ms) = Package h l . Identity <$> ms
@@ -137,14 +131,13 @@ instance FromJSON (Package Maybe) where
        Package <$> o .: "package-hashes" <*> o .: "package-locations" <*>
        o .:? "package-size"
 
-
 computePackage
   :: M env m
-  => PackageName -- ^ package
-  -> Version -- ^ version
+  => PackageName -- ^ Package name
+  -> Version -- ^ Package version
   -> m (Maybe (Package Identity))
-computePackage (renderDistText -> pkg) (renderDistText -> ver) = do
-  putStrLn $ "Computing package information for: " ++ pack pkgver
+computePackage pkgName pkgVersion = do
+  putStrLn $ "Computing package information for: " ++ pack pkgFullName
   s3req <- parseRequest s3url
   hackagereq <- parseRequest hackageurl
   mhashes <-
@@ -161,12 +154,10 @@ computePackage (renderDistText -> pkg) (renderDistText -> ver) = do
           when (hashesS3 /= hashesHackage) $
             error $
             "Mismatched hashes between S3 and Hackage: " ++
-            show (pkg, ver, hashesS3, hashesHackage)
+            show (pkgFullName, hashesS3, hashesHackage)
           return $ Just hashesS3
-        403
-        -- File not yet uploaded to S3
-         -> do
-          putStrLn $ "Skipping file not yet on S3: " ++ pack pkgver
+        403 -> do
+          putStrLn $ "Skipping file not yet on S3: " ++ pack pkgFullName
           return Nothing
         _ ->
           throwM $
@@ -186,16 +177,11 @@ computePackage (renderDistText -> pkg) (renderDistText -> ver) = do
           , packageSize = Identity size
           }
   where
-    pkgver = pkg ++ '-' : ver
+    pkgFullName = getPackageFullName pkgName pkgVersion
     hackageurl =
       concat
-        ["https://hackage.haskell.org/package/", pkgver, "/", pkgver, ".tar.gz"]
-    s3url =
-      concat
-        [ "https://s3.amazonaws.com/hackage.fpcomplete.com/package/"
-        , pkgver
-        , ".tar.gz"
-        ]
+        [hackageBaseUrl, "/package/", pkgFullName, "/", pkgFullName, ".tar.gz"]
+    s3url = concat [mirrorFPComplete, "/package/", pkgFullName, ".tar.gz"]
     pairSink = getZipSink $ (,) <$> hashesSink <*> ZipSink lengthCE
     hashesSink =
       fmap unions $

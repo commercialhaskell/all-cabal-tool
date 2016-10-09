@@ -1,3 +1,4 @@
+{-# LANGUAGE RecordWildCards #-}
 {-# LANGUAGE OverloadedStrings #-}
 {-# LANGUAGE FlexibleInstances #-}
 {-# LANGUAGE FlexibleContexts #-}
@@ -6,37 +7,30 @@
 {-# LANGUAGE ViewPatterns #-}
 module Main where
 
-import ClassyPrelude.Conduit
-import Network.HTTP.Client (parseUrlThrow, responseCookieJar)
+import ClassyPrelude.Conduit hiding ((<>))
 import Network.HTTP.Client.Conduit
-import qualified Data.ByteString as S
-import Data.ByteArray.Encoding (convertToBase, Base (Base16))
 import Network.HTTP.Simple
-import Data.Function (fix)
-import System.Environment (getEnv)
-import Network.HTTP.Types (statusCode)
-import System.Directory (doesDirectoryExist, doesFileExist, createDirectoryIfMissing)
-import System.FilePath (dropExtension, takeDirectory, takeFileName)
-import           Crypto.Hash.Conduit         (sinkHash)
+import System.Environment (getEnv, lookupEnv)
+import System.Directory (doesDirectoryExist)
+import Data.Conduit.Lazy (MonadActive)
 import Data.Conduit.Process
-import Data.Conduit.Zlib (ungzip)
-import qualified Codec.Compression.GZip as GZip
-import qualified Codec.Archive.Tar as Tar
-import qualified System.IO as IO
-import           Data.Aeson                  (FromJSON (..), ToJSON (..),
-                                              eitherDecode', encode, object,
-                                              withObject, (.:), (.:?), (.=))
-import           Crypto.Hash                 (HashAlgorithm, MD5 (..), Digest,
-                                              SHA1 (..), SHA256 (..),
-                                              SHA512 (..), Skein512_512 (..))
+import Data.Conduit.Zlib (gzip, ungzip)
+import qualified Data.ByteString.Char8 as S8 (pack)
+import Options.Applicative
+import System.IO.Temp (withSystemTempDirectory)
 import Stackage.Package.Update
-import Stackage.Package.Hashes
+import Stackage.Package.Locations
 
-indexTarGz :: FilePath
-indexTarGz = "00-index.tar.gz"
-
-rest :: Int
-rest = 1000000 * 60 -- one minute
+import Control.Lens (set)
+import Control.Monad (msum)
+import Control.Monad.Trans.AWS (trying, _Error)
+import Network.AWS
+       (Credentials(Discover, FromKeys), AccessKey(..), SecretKey(..),
+        Region(NorthVirginia), newEnv, runAWS, send)
+import Network.AWS.S3
+       (ObjectCannedACL(OPublicRead), BucketName(BucketName),
+        ObjectKey(ObjectKey), poACL, putObject)
+import Network.AWS.Data.Body (toBody)
 
 run :: FilePath -> FilePath -> [String] -> IO ()
 run dir cmd args = do
@@ -49,63 +43,141 @@ run dir cmd args = do
     withCheckedProcessCleanup
         (proc cmd args) { cwd = Just dir }
         (\Inherited Inherited Inherited -> return ())
-{-
-allCabalFiles, allCabalHashes, allCabalMetadata :: FilePath
-allCabalFiles = "all-cabal-files"
-allCabalHashes = "all-cabal-hashes"
-allCabalMetadata = "all-cabal-metadata"
--}
-ensureGitRepo :: FilePath -- ^ Dest directory
-              -> String -- ^ Branch
-              -> IO ()
-ensureGitRepo dir branch = do
-    exists <- doesDirectoryExist dir
-    if exists
-        then do
-            run dir "git" ["clean", "-fdx"]
-            run dir "git" ["remote", "set-url", "origin", url]
-            run dir "git" ["fetch"]
-            run dir "git" ["checkout", "origin/" ++ branch]
-            run dir "git" ["branch", "-D", branch]
-            run dir "git" ["checkout", "-b", branch]
-            run dir "git" ["branch", "-u", "origin/" ++ branch]
-            run dir "git" ["clean", "-fdx"]
-        else run "." "git"
-            [ "clone"
-            , "--depth=1"
-            , url
-            , dir
-            , "--branch"
-            , unpack branch
-            ]
-    run dir "git" ["config", "core.autocrlf", "input"]
+
+
+
+-- | Clones the repo if it doesn't exists locally yet, otherwise pulls from it.
+ensureGitRepository
+  :: String -- ^ Git provider ex. "github.com"
+  -> String -- ^ Repository account ex. "commercialhaskell"
+  -> GitUser -- ^ User information to be used for the commits.
+  -> String -- ^ Repository name ex. "all-cabal-files"
+  -> String -- ^ Repository branch ex. "master"
+  -> FilePath -- ^ Location in the file system where
+     -- repository should be cloned to.
+  -> IO GitRepository
+ensureGitRepository repoHost repoAccount gitUser repoName repoBranch repoBasePath = do
+  exists <- doesDirectoryExist repoLocalPath
+  if exists
+    then do
+      run repoLocalPath "git" ["clean", "-fdx"]
+      run repoLocalPath "git" ["remote", "set-url", "origin", repoAddress]
+      run repoLocalPath "git" ["fetch"]
+      run repoLocalPath "git" ["checkout", "origin/" ++ repoBranch]
+      run repoLocalPath "git" ["branch", "-D", repoBranch]
+      run repoLocalPath "git" ["checkout", "-b", repoBranch]
+      run repoLocalPath "git" ["branch", "-u", "origin/" ++ repoBranch]
+      run repoLocalPath "git" ["clean", "-fdx"]
+    else run
+           "."
+           "git"
+           [ "clone"
+           , "--depth=1"
+           , repoAddress
+           , repoLocalPath
+           , "--branch"
+           , repoBranch
+           ]
+  run repoLocalPath "git" ["config", "user.name", userName gitUser]
+  run repoLocalPath "git" ["config", "user.email", userEmail gitUser]
+  run repoLocalPath "git" ["config", "core.autocrlf", "input"]
+  return repo
   where
-    url = "git@github.com:commercialhaskell/" ++ dir
+    repo =
+      GitRepository
+      { repoAddress = repoAddress
+      , repoBranch = repoBranch
+      , repoUser = gitUser
+      , repoTag = Nothing
+      , repoLocalPath = repoLocalPath
+      }
+    repoLocalPath = repoBasePath </> repoName
+    repoAddress =
+      concat ["git@", repoHost, ":", repoAccount, "/", repoName, ".git"]
 
 
-withIndexFile :: M env m
-          => Request
-          -> (Source m S.ByteString -> m a)
-          -> m a
-withIndexFile indexReq inner = do
-  withResponse indexReq
-    $ \res -> inner $ responseBody res =$= ungzip
+-- | Commit and push all changes to the repositories.
+commitRepos :: Repositories -- ^ All three repositories
+            -> IO ()
+commitRepos Repositories {..} = do
+  let getCommitMsg = do
+        utcTime <- formatTime defaultTimeLocale "%FT%TZ" <$> getCurrentTime
+        return $ "Update from Hackage at " ++ utcTime
+  mapM_
+    (commitRepo getCommitMsg)
+    [allCabalFiles, allCabalHashes, allCabalMetadata]
+    
 
 
-{-processRequestWith
-  :: M env m
-  => Request -- ^ Request that should be processed
+commitRepo :: IO String -> GitRepository -> IO ()
+commitRepo getCommitMsg GitRepository {..} = do
+  commitMsg <- getCommitMsg
+  run repoLocalPath "git" ["add", "-A"]
+  run repoLocalPath "git" ["commit", "-m", commitMsg, "--gpg-sign=" ++ userGPG repoUser]
+  run repoLocalPath "git" ["push", repoAddress, "HEAD:" ++ repoBranch]
+  forM_
+    repoTag
+    (\tag -> do
+       run
+         repoLocalPath
+         "git"
+         ["tag", tag, "-u", userGPG repoUser, "-m", commitMsg, "-f"]
+       run repoLocalPath "git" ["push", repoAddress, "--tags", "--force"])
+
+
+
+
+getRepos :: FilePath -> String -> GitUser -> IO Repositories
+getRepos path account gitUser = do
+  let host = "github.com"      
+  allCabalFiles <-
+    ensureGitRepository host account gitUser "all-cabal-files" "hackage" path
+  allCabalHashes <-
+    ensureGitRepository host account gitUser "all-cabal-hashes" "hackage" path
+  allCabalMetadata <-
+    ensureGitRepository host account gitUser "all-cabal-metadata" "master" path
+  return
+    Repositories
+    { allCabalFiles = allCabalFiles {repoTag = Just "current-hackage" }
+    , allCabalHashes = allCabalHashes {repoTag = Just "current-hackage" }
+    , allCabalMetadata = allCabalMetadata
+    }
+  
+
+-- | Upload an oldstyle '00-index.tar.gz' (i.e. without package.json files) to
+-- an S3 bucket.
+updateIndex00 :: Credentials -> String -> GitRepository -> IO ()
+updateIndex00 awsCreds bucketName GitRepository {repoTag = Just tag
+                                       ,..} = do
+  env <- newEnv NorthVirginia awsCreds
+  withSystemTempDirectory
+    "00-index"
+    (\tmpDir -> do
+       let indexFP = tmpDir </> "00-index.tar"
+       run
+         repoLocalPath
+         "git"
+         ["archive", tag, "--format", "tar", "-o", indexFP]
+       index00 <- runResourceT $ (sourceFile indexFP =$= gzip $$ foldC)
+       let key = ObjectKey "00-index.tar.gz"
+           po =
+             set poACL (Just OPublicRead) $
+             putObject (BucketName $ pack bucketName) key (toBody index00)
+       eres <- runResourceT $ runAWS env $ trying _Error $ send po
+       case eres of
+         Left e -> error $ show (key, e)
+         Right _ -> putStrLn "Success")
+updateIndex00 _ _ _ = return ()
+
+
+
+processIndexUpdate
+  :: (MonadIO m, MonadBaseControl IO m, MonadThrow m, MonadActive m)
+  => Repositories
+  -> Request -- ^ Request that should be processed
   -> Maybe ByteString -- ^ Previous Etag, so we can check if the content has changed.
-  -> (Source m S.ByteString -> m ()) -- ^ How should we process the tarball
-  -> m (Maybe ByteString) -- ^ Returns current Etag. -}
-processRequestWith
-  :: (MonadIO m, MonadIO m1, MonadBase base m1, PrimMonad base,
-      MonadBaseControl IO m, MonadThrow m1) =>
-     Request
-     -> Maybe ByteString
-     -> (ConduitM a1 ByteString m1 () -> ReaderT Manager m a)
-     -> m (Maybe ByteString)
-processRequestWith indexReq mlastEtag processor = do
+  -> m (Bool, Maybe ByteString)
+processIndexUpdate repos indexReq mlastEtag = do
   let indexReqWithEtag = maybe id (addRequestHeader "if-none-match")
                          mlastEtag indexReq
   withManager $ do
@@ -113,29 +185,103 @@ processRequestWith indexReq mlastEtag processor = do
       $ \res -> case getResponseStatusCode res of
         200 -> do
           putStrLn "Downloading new index and updating repositories."
-          processor $ responseBody res =$= ungzip
-          return $ listToMaybe $ getResponseHeader "etag" res
-        304 -> return mlastEtag
+          allCabalUpdate repos $ responseBody res =$= ungzip
+          return (True, listToMaybe $ getResponseHeader "etag" res)
+        304 -> return (False, mlastEtag)
         _ -> error $ "Unexpected status: " ++ show (getResponseStatus res)
-      
+
+
+data Options = Options
+               { oUsername :: String
+               , oEmail :: String
+               , oGPGSign :: String
+               , oLocalPath :: Maybe FilePath -- default $HOME
+               , oDelay :: Maybe Int -- default 60 seconds
+               , oAwsAccessKey :: Maybe String
+               , oAwsSecretKey :: Maybe String
+               , oS3Bucket :: Maybe String -- default $S3_BUCKET
+               }
+
+
+optionsParser :: Parser Options
+optionsParser =
+  Options <$>
+  (strOption (long "username" <> help "Name of the user for git commits")) <*>
+  (strOption (long "email" <> help "Email of the user for git commits")) <*>
+  (strOption
+     (long "gpg-sign" <> help "Public GPG key of the user for git commits")) <*>
+  (optional
+     (strOption
+        (long "path" <>
+         help
+           ("Path where all-cabal-* repositories are/will be. " ++
+            "(Default $HOME environment variable)")))) <*>
+  (optional
+     (option
+        auto
+        (long "delay" <>
+         help
+           ("Delay in seconds before next check for a new version " ++
+            "of 01-index.tar.gz file")))) <*>
+  (optional
+     (strOption
+        (long "aws-access-key" <>
+         help
+           ("Access key for uploading 00-index.tar.gz " ++
+            "(Default is $AWS_ACCESS_KEY_ID environment variable)")))) <*>
+  (optional
+     (strOption
+        (long "aws-secret-key" <>
+         help
+           ("Secret key for uploading 00-index.tar.gz " ++
+            "(Default is $AWS_SECRET_KEY_ID environment variable)")))) <*>
+  (optional
+     (strOption
+        (long "s3-bucket" <>
+         help
+           ("Access key for uploading 00-index.tar.gz. " ++
+            "If none, uploading will be skipped. " ++
+            "(Default is $S3_BUCKET environment variable)")))) <*
+  abortOption ShowHelpText (long "help" <> help "Display this help text.")
+
 
 
 main :: IO ()
 main = do
-  --allCabalUpdate "https://s3.amazonaws.com/hackage.fpcomplete.com/01-index.tar.gz"
-  indexReq <- parseRequest $ "https://s3.amazonaws.com/hackage.fpcomplete.com/01-index.tar.gz"
-  {-
-  when False $ do
-    ensureGitRepo allCabalFiles "hackage"
-    ensureGitRepo allCabalHashes "hackage"
-    ensureGitRepo allCabalMetadata "master"
-    -}
+  Options {..} <- execParser (info optionsParser fullDesc)
+  localPath <- maybe (getEnv "HOME") return oLocalPath
+  eS3Bucket <- lookupEnv "S3_BUCKET"
+  let gitAccount = "lehins" -- "commercialhaskell"
+      delay = fromMaybe 60 oDelay * 100000
+      ms3Bucket = msum [oS3Bucket, eS3Bucket]
+      gitUser =
+        GitUser
+        { userName = oUsername
+        , userEmail = oEmail
+        , userGPG = oGPGSign
+        }
+  indexReq <- parseRequest $ mirrorFPComplete ++ "/01-index.tar.gz"
+  repos <- getRepos localPath gitAccount gitUser
   let loop mlastEtag = do
         putStrLn $ "Checking index, etag == " ++ tshow mlastEtag
-        mnewEtag <- 
-          processRequestWith indexReq mlastEtag allCabalUpdate
+        (updated, mnewEtag) <- processIndexUpdate repos indexReq mlastEtag
+        when
+          updated
+          (do commitRepos repos
+              case (ms3Bucket, oAwsAccessKey, oAwsSecretKey) of
+                (Just s3Bucket, Just awsAccessKey, Just awsSecretKey) ->
+                  updateIndex00
+                    (FromKeys
+                       (AccessKey $ S8.pack awsAccessKey)
+                       (SecretKey $ S8.pack awsSecretKey))
+                    s3Bucket
+                    (allCabalFiles repos)
+                (Just s3Bucket, Nothing, Nothing) ->
+                  updateIndex00 Discover s3Bucket (allCabalFiles repos)
+                _ ->
+                  putStrLn
+                    "No s3-bucket is provided. Uploading of 00-index.tar.gz will be skipped")
         return ()
-        --threadDelay rest
-        --loop mnewEtag
-
+        threadDelay delay
+        loop mnewEtag
   loop Nothing

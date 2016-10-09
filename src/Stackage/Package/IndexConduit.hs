@@ -21,15 +21,16 @@ module Stackage.Package.IndexConduit
 
 import qualified Codec.Archive.Tar as Tar
 import Codec.Compression.GZip (decompress)
+import Control.Exception (Exception)
 import Control.Monad (guard)
 import Control.Monad.IO.Class (liftIO)
-import Control.Monad.Trans.Resource (MonadResource, throwM)
+import Control.Monad.Trans.Resource
+       (MonadResource, MonadThrow(throwM))
 import Data.Aeson as A
 import Data.Aeson.Types as A hiding (parse)
 import qualified Data.ByteString.Lazy as L
 import qualified Data.ByteString.Lazy.Char8 as L8
 import Data.Conduit -- (Producer, bracketP, yield, (=$=))
-import Data.Conduit.Lazy (lazyConsume)
 import qualified Data.Conduit.List as CL
 import Data.Map (Map)
 import Data.Maybe (fromMaybe)
@@ -50,13 +51,10 @@ import qualified Distribution.Text
 import System.FilePath ((</>), (<.>))
 import System.IO (IOMode(ReadMode), hClose, openBinaryFile)
 import Text.PrettyPrint (render)
-import Debug.Trace
 
 sourceTarFile
   :: MonadResource m
-  => Bool
-  -> FilePath
-  -> Producer m Tar.Entry
+  => Bool -> FilePath -> Producer m Tar.Entry
 sourceTarFile toUngzip fp = do
   bracketP (openBinaryFile fp ReadMode) hClose $
     \h -> do
@@ -64,31 +62,24 @@ sourceTarFile toUngzip fp = do
       sourceEntries $ Tar.read $ ungzip' lbs
   where
     ungzip'
-        | toUngzip = decompress
-        | otherwise = id
+      | toUngzip = decompress
+      | otherwise = id
 
-
---sourceTarball :: Source m S.ByteString -> Conduit S.ByteString m Tar.Entry
---sourceTarball tarball = do
---  entries <- Tar.read . L.fromChunks <$> lazyConsume tarball
---  sourceEntries entries
---  where
+sourceEntries
+  :: (MonadThrow m, Exception e)
+  => Tar.Entries e -> ConduitM i Tar.Entry m ()
 sourceEntries Tar.Done = return ()
 sourceEntries (Tar.Next e rest) = yield e >> sourceEntries rest
 sourceEntries (Tar.Fail e) = throwM e
 
-
-
 data IndexFile p = IndexFile
-    { ifPackageName    :: !PackageName
-    , ifPackageVersion :: !(Maybe Version)
-    , ifFileName       :: !FilePath
-    , ifPath           :: !FilePath
-    , ifRaw            :: L.ByteString
-    , ifParsed         :: p
-    }
-
-
+  { ifPackageName :: !PackageName
+  , ifPackageVersion :: !(Maybe Version)
+  , ifFileName :: !FilePath
+  , ifPath :: !FilePath
+  , ifRaw :: L.ByteString
+  , ifParsed :: p
+  }
 
 data HackageHashes = HackageHashes
   { hHashes :: Map T.Text T.Text
@@ -96,11 +87,9 @@ data HackageHashes = HackageHashes
   }
 
 instance FromJSON HackageHashes where
-  parseJSON = withObject "Target hashes" $
-              \ o -> HackageHashes
-                     <$> o .: "hashes"
-                     <*> o .: "length"
-
+  parseJSON =
+    withObject "Target hashes" $
+    \o -> HackageHashes <$> o .: "hashes" <*> o .: "length"
 
 decodeHackageHashes :: PackageName
                     -> Version
@@ -117,7 +106,6 @@ decodeHackageHashes (renderDistText -> pkgName) (renderDistText -> pkgVersion) l
       target <- targets .: T.pack targetKey
       parseJSON target
 
-
 type CabalFile = IndexFile (ParseResult GenericPackageDescription)
 
 type HackageHashesFile = IndexFile (Either String HackageHashes)
@@ -131,12 +119,10 @@ data IndexFileEntry
   | PreferredVersionsEntry PreferredVersionsFile
   | UnrecognizedEntry (IndexFile ())
 
-
 getCabalFilePath :: PackageName -> Version -> FilePath
 getCabalFilePath (renderDistText -> pkgName) (renderDistText -> pkgVersion) =
   pkgName </> pkgVersion </> pkgName <.> "cabal"
 
-  
 getCabalFile :: PackageName -> Version -> L.ByteString -> CabalFile
 getCabalFile pkgName pkgVersion lbs =
   IndexFile
@@ -149,12 +135,13 @@ getCabalFile pkgName pkgVersion lbs =
     parsePackageDescription $
     TL.unpack $ dropBOM $ decodeUtf8With lenientDecode lbs
   }
-  -- https://github.com/haskell/hackage-server/issues/351
+-- https://github.com/haskell/hackage-server/issues/351
   where
     dropBOM t = fromMaybe t $ TL.stripPrefix (TL.pack "\xFEFF") t
 
-
-indexFileEntryConduit :: Monad m => Conduit Tar.Entry m IndexFileEntry
+indexFileEntryConduit
+  :: Monad m
+  => Conduit Tar.Entry m IndexFileEntry
 indexFileEntryConduit = CL.mapMaybe getIndexFileEntry
   where
     getIndexFileEntry e@(Tar.entryContent -> Tar.NormalFile lbs _) =
@@ -172,10 +159,10 @@ indexFileEntryConduit = CL.mapMaybe getIndexFileEntry
           }
           where (pkgNameStr, range) = break (== ' ') $ L8.unpack lbs
                 pkgVersionRange = do
-                  pkgVersionRange <- parseDistText range
+                  pkgVersionRange' <- parseDistText range
                   pkgName' <- parseDistText pkgNameStr
                   guard (pkgName == pkgName')
-                  Just pkgVersionRange
+                  Just pkgVersionRange'
         Just (pkgName, Just pkgVersion, fileName@"package.json") ->
           Just $
           HashesFileEntry $
@@ -187,7 +174,7 @@ indexFileEntryConduit = CL.mapMaybe getIndexFileEntry
           , ifRaw = lbs
           , ifParsed = decodeHackageHashes pkgName pkgVersion lbs
           }
-        Just (pkgName, Just pkgVersion, fileName)
+        Just (pkgName, Just pkgVersion, _)
           | getCabalFilePath pkgName pkgVersion == Tar.entryPath e ->
             Just $ CabalFileEntry $ getCabalFile pkgName pkgVersion lbs
         Just (pkgName, mpkgVersion, fileName) ->
@@ -202,7 +189,7 @@ indexFileEntryConduit = CL.mapMaybe getIndexFileEntry
           , ifParsed = ()
           }
         _ -> Nothing
-    getFileEntry _ _ = Nothing
+    getIndexFileEntry _ = Nothing
     toPkgVer s0 = do
       (pkgName', '/':s1) <- Just $ break (== '/') s0
       pkgName <- parseDistText pkgName'
@@ -213,6 +200,7 @@ indexFileEntryConduit = CL.mapMaybe getIndexFileEntry
             guard ('/' `notElem` fName)
             pkgVersion <- parseDistText pkgVersion'
             return $ (Just pkgVersion, fName)
+          _ -> Nothing
       return (pkgName, mpkgVersion, fileName)
 
 parseDistText
@@ -228,7 +216,7 @@ renderDistText
   => t -> String
 renderDistText = render . disp
 
-
+-- | Generates 'pkgname-version' string.
 getPackageFullName :: PackageName -> Version -> String
 getPackageFullName pkgName pkgVersion =
-  concat [renderDistText pkgName, "-", renderDistText pkgVersion]
+  renderDistText pkgName ++ '-' : renderDistText pkgVersion

@@ -18,8 +18,9 @@ library
                      , Stackage.Package.IndexConduit
                      , Stackage.Package.Locations
                      , Stackage.Package.Metadata
-                     , Stackage.Package.Metadata.Update
+                     , Stackage.Package.Metadata.Types
                      , Stackage.Package.Update
+--  other-modules:       
   build-depends:       base
                      , base16-bytestring
                      , bytestring
@@ -27,7 +28,6 @@ library
                      , Cabal
                      , classy-prelude-conduit
                      , conduit
-                     , conduit-combinators
                      , conduit-extra
                      , containers
                      , cryptonite
@@ -50,6 +50,7 @@ library
                      , yaml
                      , zlib
   default-language:    Haskell2010
+  ghc-options: -Wall
 
 executable all-cabal-tool
   hs-source-dirs:      app
@@ -58,6 +59,9 @@ executable all-cabal-tool
                      , bytestring
                      , aeson
                      , all-cabal-tool
+                     , amazonka
+                     , amazonka-core
+                     , amazonka-s3
                      , classy-prelude-conduit
                      , conduit-extra
                      , cryptonite
@@ -67,10 +71,14 @@ executable all-cabal-tool
                      , http-client
                      , http-conduit
                      , http-types
+                     , lens
                      , memory
+                     , optparse-applicative
                      , tar
+                     , temporary
                      , zlib
   default-language:    Haskell2010
+  ghc-options: -Wall
 
 
 source-repository head
