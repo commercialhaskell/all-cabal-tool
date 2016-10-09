@@ -9,9 +9,12 @@ module Stackage.Package.IndexConduit
   , renderDistText
   , getCabalFilePath
   , getCabalFile
-  , indexFileEntryConduit, sourceEntries
+  , getPackageFullName
+  , indexFileEntryConduit
+  , sourceEntries
   , IndexFile(..)
   , IndexFileEntry(..)
+  , HackageHashes(..)
   , CabalFile
   , HackageHashesFile
   ) where
@@ -22,13 +25,16 @@ import Control.Monad (guard)
 import Control.Monad.IO.Class (liftIO)
 import Control.Monad.Trans.Resource (MonadResource, throwM)
 import Data.Aeson as A
+import Data.Aeson.Types as A hiding (parse)
 import qualified Data.ByteString.Lazy as L
 import qualified Data.ByteString.Lazy.Char8 as L8
 import Data.Conduit -- (Producer, bracketP, yield, (=$=))
 import Data.Conduit.Lazy (lazyConsume)
 import qualified Data.Conduit.List as CL
+import Data.Map (Map)
 import Data.Maybe (fromMaybe)
 import Data.Text.Encoding.Error (lenientDecode)
+import qualified Data.Text as T
 import qualified Data.Text.Lazy as TL
 import Data.Text.Lazy.Encoding (decodeUtf8With)
 import Data.Version (Version)
@@ -83,26 +89,34 @@ data IndexFile p = IndexFile
     }
 
 
+
 data HackageHashes = HackageHashes
-  { hHashes :: [String]
+  { hHashes :: Map T.Text T.Text
   , hLength :: Word64
   }
 
 instance FromJSON HackageHashes where
-  parseJSON = withObject "Package hash values from Hackage" $
+  parseJSON = withObject "Target hashes" $
               \ o -> HackageHashes
                      <$> o .: "hashes"
                      <*> o .: "length"
 
-{-
-data CabalFileEntry = CabalFileEntry
-  { cfeName :: !PackageName
-  , cfeVersion :: !Version
-  , cfePath :: FilePath
-  , cfeRaw :: L.ByteString
-  , cfeParsed :: ParseResult GenericPackageDescription
-  }
--}
+
+decodeHackageHashes :: PackageName
+                    -> Version
+                    -> L8.ByteString
+                    -> Either String HackageHashes
+decodeHackageHashes (renderDistText -> pkgName) (renderDistText -> pkgVersion) lbs = do
+  val <- A.eitherDecode lbs
+  A.parseEither (withObject "Package hash values from Hackage" hashesParser) val
+  where
+    targetKey = concat ["<repo>/package/", pkgName, "-", pkgVersion, ".tar.gz"]
+    hashesParser obj = do
+      signed <- obj .: "signed"
+      targets <- signed .: "targets"
+      target <- targets .: T.pack targetKey
+      parseJSON target
+
 
 type CabalFile = IndexFile (ParseResult GenericPackageDescription)
 
@@ -171,7 +185,7 @@ indexFileEntryConduit = CL.mapMaybe getIndexFileEntry
           , ifFileName = fileName
           , ifPath = Tar.entryPath e
           , ifRaw = lbs
-          , ifParsed = A.eitherDecode lbs
+          , ifParsed = decodeHackageHashes pkgName pkgVersion lbs
           }
         Just (pkgName, Just pkgVersion, fileName)
           | getCabalFilePath pkgName pkgVersion == Tar.entryPath e ->
@@ -213,3 +227,8 @@ renderDistText
   :: Distribution.Text.Text t
   => t -> String
 renderDistText = render . disp
+
+
+getPackageFullName :: PackageName -> Version -> String
+getPackageFullName pkgName pkgVersion =
+  concat [renderDistText pkgName, "-", renderDistText pkgVersion]

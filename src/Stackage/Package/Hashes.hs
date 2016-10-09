@@ -24,11 +24,12 @@ import Data.Aeson
 import qualified Data.ByteString.Base16 as B16
 import Data.Conduit.Lazy (lazyConsume)
 import Data.Conduit.Zlib (ungzip)
+import qualified Data.Map as Map
 import Distribution.Package (PackageName)
 import qualified Data.Text.Lazy.Builder.Int
 import Network.HTTP.Client.Conduit
        (HasHttpManager, HttpException(StatusCodeException), checkStatus,
-        parseUrl, responseBody, responseCookieJar, responseHeaders,
+        parseRequest, responseBody, responseCookieJar, responseHeaders,
         responseStatus, withManager, withResponse)
 import Network.HTTP.Types (statusCode)
 import System.Directory
@@ -72,40 +73,47 @@ createHashesIfMissing hashesRepo pkgName pkgVersion = do
           return $ Just packageHashes
 
 
-
-handleEntry
+entryUpdateHashes
   :: M env m
   => GitRepository -> IndexFileEntry -> m ()
 -- update cabal file with latest version and then compute package hashes if
 -- missing
-handleEntry hashesRepo (CabalFileEntry IndexFile {ifPackageVersion = Just pkgVersion
-                                                 ,..}) = do
+entryUpdateHashes hashesRepo (CabalFileEntry IndexFile {ifPackageVersion = Just pkgVersion
+                                                       ,..}) = do
   liftIO $ repoFileWriter hashesRepo ifPath (`writeFile` ifRaw)
+  -- TODO: Line below is likely unnecessary, since each cabal has a
+  -- corresponding 'package.json' file, which is handled by the next case
+  -- anyways.
   void $ createHashesIfMissing hashesRepo ifPackageName pkgVersion
 -- Handle a possiblity of malformed 'package.json' file
-handleEntry hashesRepo (HashesFileEntry IndexFile {ifParsed = Left err, ifPath}) = return ()
-  --liftIO $
-  --  hPutStrLn stderr $ "AllCabalHashes: There was an issue parsing: " ++ ifPath
--- create hashes if not present yet and validate that values do agree.
-handleEntry hashesRepo (HashesFileEntry IndexFile {ifPackageVersion = Just pkgVersion
-                                                  ,ifParsed = Right hashes, ..}) = do
-  packageHashes <- createHashesIfMissing hashesRepo ifPackageName pkgVersion
-  -- TODO: validate that computed hashes match ones from hackage.
+entryUpdateHashes hashesRepo (HashesFileEntry IndexFile {ifParsed = Left err
+                                                        ,ifPath}) =
+  liftIO $
+  hPutStrLn stderr $ "AllCabalHashes: There was an issue parsing: " ++ ifPath
+-- create hashes if not present yet and validate that values with Hackage do agree.
+entryUpdateHashes hashesRepo (HashesFileEntry IndexFile {ifPackageVersion = Just pkgVersion
+                                                        ,ifParsed = Right hackageHashes
+                                                        ,..}) = do
+  mpackage <- createHashesIfMissing hashesRepo ifPackageName pkgVersion
+  case mpackage of
+    Nothing -> return ()
+    Just package -> mapM_ checkHash [tshow MD5, tshow SHA256]
+      where checkHash hashType =
+              unless
+                (Map.lookup (toLower hashType) (hHashes hackageHashes) ==
+                 Map.lookup hashType (packageHashes package))
+                (error $
+                 "Hash " ++
+                 unpack hashType ++
+                 "value mismatch for: '" ++
+                 getPackageFullName ifPackageName pkgVersion ++
+                 "' computed vs one from Hackage.")
   return ()
 -- Write preferred versions file
-handleEntry hashesRepo (PreferredVersionsEntry IndexFile {..}) = do
+entryUpdateHashes hashesRepo (PreferredVersionsEntry IndexFile {..}) = do
   liftIO $ repoFileWriter hashesRepo ifPath (`writeFile` ifRaw)
-handleEntry _ _ = return ()
-  
-{-
-handleEntry entry
-  | takeFileName (Tar.entryPath entry) == "preferred-versions"
-  , Tar.NormalFile lbs _ <- Tar.entryContent entry = do
-    liftIO $ createDirectoryIfMissing True $ takeDirectory $ Tar.entryPath entry
-    writeFile (Tar.entryPath entry) lbs
-    return 0
-handleEntry _ = return 0
--}
+entryUpdateHashes _ _ = return ()
+
 
 -- | Kinda like sequence, except not.
 flatten :: Package Maybe -> Maybe (Package Identity)
@@ -137,8 +145,8 @@ computePackage
   -> m (Maybe (Package Identity))
 computePackage (renderDistText -> pkg) (renderDistText -> ver) = do
   putStrLn $ "Computing package information for: " ++ pack pkgver
-  s3req <- parseUrl s3url
-  hackagereq <- parseUrl hackageurl
+  s3req <- parseRequest s3url
+  hackagereq <- parseRequest hackageurl
   mhashes <-
     withResponse
       s3req

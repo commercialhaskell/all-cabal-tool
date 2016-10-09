@@ -165,16 +165,26 @@ updatePackageIfChanged metadataRepo (IndexFile {ifParsed = ParseOk _ gpd
     show ("mismatch" :: String, ifPackageName, ifPackageVersion, package pd)
   case epi of
     Right pi
-    -- cabal file is the same and version preference list hasn't changed.
+    -- Cabal file is the same and version preference list hasn't changed.
       | cabalHash == piHash pi && versionSet == piAllVersions pi -> return ()
     Right pi
-    -- TODO: current version hasn't changed, hence data in the sdist.tar.gz is
-    -- stil the same, updating cabal related info only.
-      | pkgVersion == piLatest pi -> do
-        liftIO $
-          putStrLn $
-          "TODO: Package metadata should be updated: " ++ pkgNameStr ++ "-" ++ pkgVersionStr
-        return ()
+    -- Current version hasn't changed, hence data in the sdist.tar.gz is stil
+    -- the same, updating cabal related info only.
+      | pkgVersion == piLatest pi -> liftIO $ do
+        repoFileWriter metadataRepo fp (void . tryAny . removeFile)
+        repoFileWriter
+          metadataRepo
+          fp
+          (`encodeFile` pi
+                          { piLatest = pkgVersion
+                          , piHash = cabalHash
+                          , piAllVersions = versionSet
+                          , piSynopsis = pack $ synopsis pd
+                          , piAuthor = pack $ author pd
+                          , piMaintainer = pack $ maintainer pd
+                          , piHomepage = pack $ homepage pd
+                          , piLicenseName = pack $ renderDistText $ license pd
+                          })
     -- Version update or a totally new package.
     _ -> liftIO $ withSystemTempFile "sdist.tar.gz" updatePackage
   where
