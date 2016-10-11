@@ -20,7 +20,6 @@ import Control.Monad.Trans.Resource
 import Crypto.Hash (hashlazy, SHA256(..))
 import qualified Data.ByteString.Lazy as L
 import Data.Conduit
-import Data.Conduit.Binary (sinkHandle)
 import qualified Data.Conduit.List as CL
 import Data.Map (Map)
 import qualified Data.Map as Map
@@ -51,8 +50,6 @@ import Network.HTTP.Simple
 import Prelude hiding (pi)
 import System.Directory (removeFile)
 import System.FilePath (splitExtension, takeFileName, (<.>), (</>))
-import System.IO (hSetBinaryMode, hClose)
-import System.IO.Temp
 
 import Stackage.Package.Hashes
 import Stackage.Package.Metadata.Types
@@ -163,7 +160,7 @@ updatePackageIfChanged metadataRepo (IndexFile {ifParsed = ParseOk _ gpd
                            , piLicenseName = pack $ renderDistText $ license pd
                            })
     -- Version update or a totally new package.
-    _ -> liftIO $ withSystemTempFile "sdist.tar.gz" updatePackage
+    _ -> liftIO updatePackage
   where
     pkgNameStr = renderDistText ifPackageName
     pkgVersionStr = renderDistText pkgVersion
@@ -178,24 +175,20 @@ updatePackageIfChanged metadataRepo (IndexFile {ifParsed = ParseOk _ gpd
         , pkgVersionStr
         , ".tar.gz"
         ]
-    updatePackage sdistFP sdistH = do
-      hSetBinaryMode sdistH True
-      putStrLn $
-        concat
-          [ "Loading "
-          , renderDistText ifPackageName
-          , "-"
-          , renderDistText pkgVersion
-          ]
-      req <- parseRequest url
-      res <- httpSink req $ \res -> sinkHandle sdistH >> return res
-      hClose sdistH
-      if getResponseStatus res == status200
-        then do
-          (desc, desct, cl, clt) <-
-            runResourceT $
-            sourceTarFile True sdistFP $$
-            CL.fold goEntry (pack $ description pd, "haddock", "", "")
+    shouldContinue res =
+      (Nothing :: Maybe (), getResponseStatus res == status200)
+    updatePackage = do
+      sdistReq <- parseRequest url
+      (Nothing, result) <-
+        runResourceT $
+        httpTarballSink
+          sdistReq
+          True
+          (CL.fold goEntry (pack $ description pd, "haddock", "", ""))
+          shouldContinue
+      case result of
+        Nothing -> putStrLn $ "Skipping: " ++ url
+        Just (desc, desct, cl, clt) -> do
           putStrLn $
             "Updating Metadata for package: " ++
             pkgNameStr ++ " to version: " ++ pkgVersionStr
@@ -227,8 +220,6 @@ updatePackageIfChanged metadataRepo (IndexFile {ifParsed = ParseOk _ gpd
                           , piHomepage = pack $ homepage pd
                           , piLicenseName = pack $ renderDistText $ license pd
                           })
-        else putStrLn $ "Skipping: " ++ url
-      return ()
     fp =
       "packages" </> (unpack $ toLower $ pack $ take 2 $ pkgNameStr ++ "XX") </>
       pkgNameStr <.>

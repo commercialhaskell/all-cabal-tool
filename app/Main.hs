@@ -8,19 +8,10 @@
 module Main where
 
 import ClassyPrelude.Conduit hiding ((<>))
-import Network.HTTP.Client.Conduit
-import Network.HTTP.Simple
-import System.Environment (getEnv, lookupEnv)
-import System.Directory (doesDirectoryExist)
 import Data.Conduit.Lazy (MonadActive)
 import Data.Conduit.Process
-import Data.Conduit.Zlib (gzip, ungzip)
+import Data.Conduit.Zlib (gzip)
 import qualified Data.ByteString.Char8 as S8 (pack)
-import Options.Applicative
-import System.IO.Temp (withSystemTempDirectory)
-import Stackage.Package.Update
-import Stackage.Package.Locations
-
 import Control.Lens (set)
 import Control.Monad (msum)
 import Control.Monad.Trans.AWS (trying, _Error)
@@ -31,19 +22,47 @@ import Network.AWS.S3
        (ObjectCannedACL(OPublicRead), BucketName(BucketName),
         ObjectKey(ObjectKey), poACL, putObject)
 import Network.AWS.Data.Body (toBody)
+import Network.HTTP.Simple
+       (Request, parseRequest, addRequestHeader, getResponseStatus,
+        getResponseStatusCode, getResponseHeader)
+import Options.Applicative
+import System.Environment (setEnv, getEnv, lookupEnv)
+import System.Exit (ExitCode(..))
+import System.Directory (doesDirectoryExist)
+import System.IO.Temp (withSystemTempDirectory)
+
+import Stackage.Package.Update
+import Stackage.Package.Locations
+import Stackage.Package.IndexConduit
 
 run :: FilePath -> FilePath -> [String] -> IO ()
 run dir cmd args = do
-    putStrLn $ concat
-        [ "Running in "
-        , tshow dir
-        , ": "
-        , unwords $ map pack $ cmd : args
-        ]
-    withCheckedProcessCleanup
-        (proc cmd args) { cwd = Just dir }
-        (\Inherited Inherited Inherited -> return ())
+  putStrLn $
+    concat ["Running in ", tshow dir, ": ", unwords $ map pack $ cmd : args]
+  withCheckedProcessCleanup
+    (proc cmd args)
+    { cwd = Just dir
+    }
+    (\Inherited Inherited Inherited -> return ())
 
+
+-- | Similar to `run`, but will return the process' output as a `ByteString`.
+getOutput :: FilePath -> FilePath -> [String] -> IO ByteString
+getOutput dir cmd args = do
+  putStrLn $
+    concat ["Running in ", tshow dir, ": ", unwords $ map pack $ cmd : args]
+  (exitCode, out) <-
+    sourceProcessWithConsumer
+      (proc cmd args)
+      { cwd = Just dir
+      }
+      foldC
+  case exitCode of
+    ExitSuccess -> return out
+    code ->
+      error $
+      "Calling: " ++
+      showCommandForUser cmd args ++ " produced an error " ++ show code
 
 
 -- | Clones the repo if it doesn't exists locally yet, otherwise pulls from it.
@@ -111,18 +130,25 @@ commitRepos Repositories {..} = do
 
 commitRepo :: IO String -> GitRepository -> IO ()
 commitRepo getCommitMsg GitRepository {..} = do
-  commitMsg <- getCommitMsg
   run repoLocalPath "git" ["add", "-A"]
-  run repoLocalPath "git" ["commit", "-m", commitMsg, "--gpg-sign=" ++ userGPG repoUser]
-  run repoLocalPath "git" ["push", repoAddress, "HEAD:" ++ repoBranch]
-  forM_
-    repoTag
-    (\tag -> do
-       run
-         repoLocalPath
-         "git"
-         ["tag", tag, "-u", userGPG repoUser, "-m", commitMsg, "-f"]
-       run repoLocalPath "git" ["push", repoAddress, "--tags", "--force"])
+  out <- getOutput repoLocalPath "git" ["status", "--porcelain"]
+  if null out
+    then putStrLn $ "Info: Nothing to commit in " ++ pack repoLocalPath
+    else do
+      commitMsg <- getCommitMsg
+      run
+        repoLocalPath
+        "git"
+        ["commit", "-m", commitMsg, "--gpg-sign=" ++ userGPG repoUser]
+      run repoLocalPath "git" ["push", repoAddress, "HEAD:" ++ repoBranch]
+      forM_
+        repoTag
+        (\tag -> do
+           run
+             repoLocalPath
+             "git"
+             ["tag", tag, "-u", userGPG repoUser, "-m", commitMsg, "-f"]
+           run repoLocalPath "git" ["push", repoAddress, "--tags", "--force"])
 
 
 
@@ -170,25 +196,28 @@ updateIndex00 awsCreds bucketName GitRepository {repoTag = Just tag
 updateIndex00 _ _ _ = return ()
 
 
-
 processIndexUpdate
-  :: (MonadIO m, MonadBaseControl IO m, MonadThrow m, MonadActive m)
+  :: (MonadActive m, MonadIO m, MonadMask m, MonadBaseControl IO m)
   => Repositories
   -> Request -- ^ Request that should be processed
   -> Maybe ByteString -- ^ Previous Etag, so we can check if the content has changed.
   -> m (Bool, Maybe ByteString)
 processIndexUpdate repos indexReq mlastEtag = do
-  let indexReqWithEtag = maybe id (addRequestHeader "if-none-match")
-                         mlastEtag indexReq
-  withManager $ do
-    withResponse indexReqWithEtag
-      $ \res -> case getResponseStatusCode res of
-        200 -> do
-          putStrLn "Downloading new index and updating repositories."
-          allCabalUpdate repos $ responseBody res =$= ungzip
-          return (True, listToMaybe $ getResponseHeader "etag" res)
-        304 -> return (False, mlastEtag)
-        _ -> error $ "Unexpected status: " ++ show (getResponseStatus res)
+  let indexReqWithEtag = maybe id (addRequestHeader "if-none-match") mlastEtag indexReq
+  (mnewEtag, msunk) <- runResourceT $ httpTarballSink
+    indexReqWithEtag
+    True
+    (allCabalUpdate repos)
+    (\res ->
+        case getResponseStatusCode res of
+          200 -> (listToMaybe $ getResponseHeader "etag" res, True)
+          304 -> (mlastEtag, False)
+          _ -> error $ "Unexpected status: " ++ show (getResponseStatus res))
+  return $ case msunk of
+    Just _ -> (True, mnewEtag)
+    Nothing -> (False, mnewEtag)
+
+
 
 
 data Options = Options
@@ -197,8 +226,8 @@ data Options = Options
                , oGPGSign :: String
                , oLocalPath :: Maybe FilePath -- default $HOME
                , oDelay :: Maybe Int -- default 60 seconds
-               , oAwsAccessKey :: Maybe String
-               , oAwsSecretKey :: Maybe String
+               , oAwsAccessKey :: Maybe String -- default $AWS_ACCESS_KEY_ID
+               , oAwsSecretKey :: Maybe String -- default $AWS_SECRET_KEY_ID
                , oS3Bucket :: Maybe String -- default $S3_BUCKET
                }
 
@@ -252,7 +281,7 @@ main = do
   localPath <- maybe (getEnv "HOME") return oLocalPath
   eS3Bucket <- lookupEnv "S3_BUCKET"
   let gitAccount = "lehins" -- "commercialhaskell"
-      delay = fromMaybe 60 oDelay * 100000
+      delay = fromMaybe 60 oDelay * 1000000
       ms3Bucket = msum [oS3Bucket, eS3Bucket]
       gitUser =
         GitUser
@@ -260,11 +289,25 @@ main = do
         , userEmail = oEmail
         , userGPG = oGPGSign
         }
+  case (ms3Bucket, oAwsAccessKey, oAwsSecretKey) of
+    (Just _, Just accessKey, Nothing) -> setEnv "AWS_ACCESS_KEY_ID" accessKey
+    (Just _, Nothing, Just secretKey) -> setEnv "AWS_SECRET_KEY_ID" secretKey
+    (Nothing, _, _) ->
+      putStrLn
+        "WARNING: No s3-bucket is provided. Uploading of 00-index.tar.gz will be disabled."
+    _ -> return ()
   indexReq <- parseRequest $ mirrorFPComplete ++ "/01-index.tar.gz"
   repos <- getRepos localPath gitAccount gitUser
   let loop mlastEtag = do
         putStrLn $ "Checking index, etag == " ++ tshow mlastEtag
-        (updated, mnewEtag) <- processIndexUpdate repos indexReq mlastEtag
+        (updated, mnewEtag) <-
+          catchAnyDeep
+            (processIndexUpdate repos indexReq mlastEtag)
+            (\e -> do
+               hPutStrLn stderr $
+                 "ERROR: Received an unexpected exception while updating the repositories: " ++
+                 show e
+               return (False, mlastEtag))
         when
           updated
           (do commitRepos repos
@@ -278,10 +321,7 @@ main = do
                     (allCabalFiles repos)
                 (Just s3Bucket, Nothing, Nothing) ->
                   updateIndex00 Discover s3Bucket (allCabalFiles repos)
-                _ ->
-                  putStrLn
-                    "No s3-bucket is provided. Uploading of 00-index.tar.gz will be skipped")
-        return ()
+                _ -> return ())
         threadDelay delay
         loop mnewEtag
   loop Nothing

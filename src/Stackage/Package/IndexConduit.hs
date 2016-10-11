@@ -1,17 +1,20 @@
+{-# LANGUAGE CPP #-}
+{-# LANGUAGE BangPatterns #-}
 {-# LANGUAGE FlexibleContexts #-}
 {-# LANGUAGE OverloadedStrings #-}
 {-# LANGUAGE RankNTypes #-}
 {-# LANGUAGE ViewPatterns #-}
-
+{-# LANGUAGE NoImplicitPrelude #-}
+{-# LANGUAGE ScopedTypeVariables #-}
 module Stackage.Package.IndexConduit
-  ( sourceTarFile
-  , parseDistText
+  ( parseDistText
   , renderDistText
   , getCabalFilePath
   , getCabalFile
   , getPackageFullName
   , indexFileEntryConduit
   , sourceEntries
+  , httpTarballSink
   , IndexFile(..)
   , IndexFileEntry(..)
   , HackageHashes(..)
@@ -19,27 +22,20 @@ module Stackage.Package.IndexConduit
   , HackageHashesFile
   ) where
 
+import ClassyPrelude.Conduit
 import qualified Codec.Archive.Tar as Tar
-import Codec.Compression.GZip (decompress)
-import Control.Exception (Exception)
-import Control.Monad (guard)
-import Control.Monad.IO.Class (liftIO)
-import Control.Monad.Trans.Resource
-       (MonadResource, MonadThrow(throwM))
 import Data.Aeson as A
 import Data.Aeson.Types as A hiding (parse)
 import qualified Data.ByteString.Lazy as L
 import qualified Data.ByteString.Lazy.Char8 as L8
-import Data.Conduit -- (Producer, bracketP, yield, (=$=))
 import qualified Data.Conduit.List as CL
-import Data.Map (Map)
-import Data.Maybe (fromMaybe)
+import Data.Conduit.Lazy (lazyConsume, MonadActive)
+import Data.Conduit.Zlib
+--import Data.IORef (modifyIORef')
 import Data.Text.Encoding.Error (lenientDecode)
-import qualified Data.Text as T
-import qualified Data.Text.Lazy as TL
+import qualified Data.Text.Lazy as TL (stripPrefix)
 import Data.Text.Lazy.Encoding (decodeUtf8With)
 import Data.Version (Version)
-import Data.Word (Word64)
 import Distribution.Compat.ReadP (readP_to_S)
 import Distribution.Package (PackageName)
 import Distribution.PackageDescription (GenericPackageDescription)
@@ -48,29 +44,79 @@ import Distribution.PackageDescription.Parse
 import Distribution.Text (disp, parse)
 import Distribution.Version (VersionRange)
 import qualified Distribution.Text
-import System.FilePath ((</>), (<.>))
-import System.IO (IOMode(ReadMode), hClose, openBinaryFile)
+import Network.HTTP.Client.Conduit
 import Text.PrettyPrint (render)
 
-sourceTarFile
-  :: MonadResource m
-  => Bool -> FilePath -> Producer m Tar.Entry
-sourceTarFile toUngzip fp = do
-  bracketP (openBinaryFile fp ReadMode) hClose $
-    \h -> do
-      lbs <- liftIO $ L.hGetContents h
-      sourceEntries $ Tar.read $ ungzip' lbs
-  where
-    ungzip'
-      | toUngzip = decompress
-      | otherwise = id
+#if MIN_VERSION_http_conduit(2,2,1)
+import Network.HTTP.Simple (httpSource)
+#else
+import qualified Network.HTTP.Client as H
+import qualified Network.HTTP.Client.TLS as H
+
+-- | For future compatibility, copied here from http-conduit-2.2.1
+httpSource
+  :: (MonadResource m, MonadIO n)
+  => Request
+  -> (Response (ConduitM i ByteString n ()) -> ConduitM i o m r)
+  -> ConduitM i o m r
+httpSource req withRes = do
+  man <- liftIO H.getGlobalManager
+  bracketP
+    (H.responseOpen req man)
+    H.responseClose
+    (withRes . fmap bodyReaderSource)
+#endif
+
+data StopException = StopException deriving Show
+
+instance Exception StopException
+
+-- | Download a tarball from a webserver, decompress, parse it and handle it
+-- using a provided `Sink`. Using a conditional function it is possible to
+-- prevent a tarball from being downloaded, for instance in such a case when an
+-- unexpected response status was received, in which case `Nothing` will be
+-- returned. That function also allows to return any value that depends on a
+-- `Response`.
+httpTarballSink
+  :: (MonadActive m, MonadCatch m, MonadResource m, MonadBaseControl IO m)
+  => Request -- ^ Request to the tarball file.
+  -> Bool -- ^ Is the tarball gzipped?
+  -> Sink Tar.Entry m b -- ^ The sink of how entries in the tar file should be
+     -- processed.
+  -> (Response () -> (Maybe a, Bool)) -- ^ This function allows to return a
+     -- value as a part of the result of `httpTarballSink`, as well as instruct
+     -- if further processing of the response should continue or not.
+  -> m (Maybe a, Maybe b)
+httpTarballSink req isCompressed tarSink onResp = do
+  retRef <- liftIO $ newIORef Nothing
+  let src =
+        httpSource req $
+        \res -> do
+          let (val, hasFuture) = onResp $ fmap (const ()) res
+          hasFutureStrict <- liftIO $ atomicModifyIORef' retRef (const (val, hasFuture))
+          unless hasFutureStrict $ throwM StopException
+          if isCompressed
+            then responseBody res =$= ungzip
+            else responseBody res
+  catch
+    (do tarChunks <- lazyConsume src
+        val <- liftIO $ (tarChunks `seq` readIORef retRef)
+        result <- (sourceEntries $ Tar.read $ L.fromChunks tarChunks) $$ tarSink
+        return (val, Just result)
+    )
+    (\(_ :: StopException) -> do
+        val <- liftIO $ readIORef retRef
+        return (val, Nothing))
+
 
 sourceEntries
   :: (MonadThrow m, Exception e)
-  => Tar.Entries e -> ConduitM i Tar.Entry m ()
+  => Tar.Entries e -> Producer m Tar.Entry
 sourceEntries Tar.Done = return ()
 sourceEntries (Tar.Next e rest) = yield e >> sourceEntries rest
 sourceEntries (Tar.Fail e) = throwM e
+
+
 
 data IndexFile p = IndexFile
   { ifPackageName :: !PackageName
@@ -82,7 +128,7 @@ data IndexFile p = IndexFile
   }
 
 data HackageHashes = HackageHashes
-  { hHashes :: Map T.Text T.Text
+  { hHashes :: Map Text Text
   , hLength :: Word64
   }
 
@@ -95,22 +141,24 @@ decodeHackageHashes :: PackageName
                     -> Version
                     -> L8.ByteString
                     -> Either String HackageHashes
-decodeHackageHashes (renderDistText -> pkgName) (renderDistText -> pkgVersion) lbs = do
+decodeHackageHashes pkgName pkgVersion lbs = do
   val <- A.eitherDecode lbs
   A.parseEither (withObject "Package hash values from Hackage" hashesParser) val
   where
-    targetKey = concat ["<repo>/package/", pkgName, "-", pkgVersion, ".tar.gz"]
+    targetKey =
+      concat
+        ["<repo>/package/", getPackageFullName pkgName pkgVersion, ".tar.gz"]
     hashesParser obj = do
       signed <- obj .: "signed"
       targets <- signed .: "targets"
-      target <- targets .: T.pack targetKey
+      target <- targets .: pack targetKey
       parseJSON target
 
 type CabalFile = IndexFile (ParseResult GenericPackageDescription)
 
 type HackageHashesFile = IndexFile (Either String HackageHashes)
 
--- | Versions file can be empty, which means preference list was cleared.
+-- | Versions file can be empty - `Nothing`, which means preference list was cleared.
 type PreferredVersionsFile = IndexFile (Maybe VersionRange)
 
 data IndexFileEntry
@@ -133,11 +181,11 @@ getCabalFile pkgName pkgVersion lbs =
   , ifRaw = lbs
   , ifParsed =
     parsePackageDescription $
-    TL.unpack $ dropBOM $ decodeUtf8With lenientDecode lbs
+    unpack $ dropBOM $ decodeUtf8With lenientDecode lbs
   }
 -- https://github.com/haskell/hackage-server/issues/351
   where
-    dropBOM t = fromMaybe t $ TL.stripPrefix (TL.pack "\xFEFF") t
+    dropBOM t = fromMaybe t $ TL.stripPrefix (pack "\xFEFF") t
 
 indexFileEntryConduit
   :: Monad m
@@ -197,7 +245,7 @@ indexFileEntryConduit = CL.mapMaybe getIndexFileEntry
         case break (== '/') s1 of
           (fName, []) -> Just (Nothing, fName)
           (pkgVersion', '/':fName) -> do
-            guard ('/' `notElem` fName)
+            guard ('/' `onotElem` fName)
             pkgVersion <- parseDistText pkgVersion'
             return $ (Just pkgVersion, fName)
           _ -> Nothing

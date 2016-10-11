@@ -1,6 +1,6 @@
+{-# OPTIONS_GHC -fno-warn-redundant-constraints #-}
 {-# LANGUAGE NamedFieldPuns #-}
 {-# LANGUAGE RecordWildCards #-}
-{-# LANGUAGE ConstraintKinds #-}
 {-# LANGUAGE FlexibleContexts #-}
 {-# LANGUAGE FlexibleInstances #-}
 {-# LANGUAGE MultiParamTypeClasses #-}
@@ -23,42 +23,30 @@ import Data.Aeson
 import qualified Data.Map as Map
 import Distribution.Package (PackageName)
 import Network.HTTP.Client.Conduit
-       (HasHttpManager, HttpException(StatusCodeException), checkStatus,
-        parseRequest, responseBody, responseCookieJar, responseHeaders,
-        responseStatus, withResponse)
+       (HttpException(StatusCodeException), parseRequest,
+        responseCookieJar, responseHeaders, responseStatus)
 import Network.HTTP.Types (statusCode)
+import Network.HTTP.Simple (httpSink)
 import System.Directory
 import System.FilePath (dropExtension)
 
 import Stackage.Package.Locations
 import Stackage.Package.IndexConduit
 
-type M env m = (HasHttpManager env, MonadThrow m, MonadBaseControl IO m, MonadReader env m, MonadIO m)
-
--- | Performs an update per package version:
---
--- * updates the .cabal file checks if hash file is present and matches the
--- * hashes in 'package.json'. Calculates it if is not present.
+-- | Compares hashes in 'package.json' to the ones in the repo. In case a new
+-- package.json appears without coresponding hashes in the repo, a package is
+-- downloaded, hashes are computed and compared to ones in 'package.json' file.
+-- 
 entryUpdateHashes
-  :: M env m
+  :: (MonadMask m, MonadIO m)
   => GitRepository -> IndexFileEntry -> m ()
--- update cabal file with latest version and then compute package hashes if
--- missing
-entryUpdateHashes hashesRepo (CabalFileEntry IndexFile {ifPackageVersion = Just pkgVersion
-                                                       ,..}) = do
-  liftIO $ repoFileWriter hashesRepo ifPath (`writeFile` ifRaw)
-  -- TODO: Line below is likely unnecessary, since each cabal has a
-  -- corresponding 'package.json' file, which is handled by the next case
-  -- anyways.
-  void $ createHashesIfMissing hashesRepo ifPackageName pkgVersion
--- Handle a possiblity of malformed 'package.json' file
+{- Handle a possiblity of malformed 'package.json' file -}
 entryUpdateHashes _ (HashesFileEntry IndexFile {ifParsed = Left err
                                                ,ifPath}) =
-  liftIO $
-  hPutStrLn stderr $
+  error $
   "Stackage.Hackage.Hashes.entryUpdateHashes: There was an issue parsing: " ++
   ifPath ++ ". Parsing error: " ++ err
--- create hashes if not present yet and validate that values with Hackage do agree.
+{- Create hashes if not present yet and validate that values with Hackage do agree. -}
 entryUpdateHashes hashesRepo (HashesFileEntry IndexFile {ifPackageVersion = Just pkgVersion
                                                         ,ifParsed = Right hackageHashes
                                                         ,..}) = do
@@ -76,16 +64,12 @@ entryUpdateHashes hashesRepo (HashesFileEntry IndexFile {ifPackageVersion = Just
                  "value mismatch for: '" ++
                  getPackageFullName ifPackageName pkgVersion ++
                  "' computed vs one from Hackage.")
-  return ()
--- Write preferred versions file
-entryUpdateHashes hashesRepo (PreferredVersionsEntry IndexFile {..}) = do
-  liftIO $ repoFileWriter hashesRepo ifPath (`writeFile` ifRaw)
 entryUpdateHashes _ _ = return ()
 
 -- | If json file with package hashes is missing or corrupt (not parsable) it
 -- downloads the taralls with source code and saves their the hashes.
 createHashesIfMissing
-  :: M env m
+  :: (MonadMask m, MonadIO m)
   => GitRepository -> PackageName -> Version -> m (Maybe (Package Identity))
 createHashesIfMissing hashesRepo pkgName pkgVersion = do
   let jsonfp = dropExtension (getCabalFilePath pkgName pkgVersion) <.> "json"
@@ -132,7 +116,7 @@ instance FromJSON (Package Maybe) where
        o .:? "package-size"
 
 computePackage
-  :: M env m
+  :: (MonadMask m, MonadIO m)
   => PackageName -- ^ Package name
   -> Version -- ^ Package version
   -> m (Maybe (Package Identity))
@@ -141,31 +125,26 @@ computePackage pkgName pkgVersion = do
   s3req <- parseRequest s3url
   hackagereq <- parseRequest hackageurl
   mhashes <-
-    withResponse
+    httpSink
       s3req
-      { checkStatus = \_ _ _ -> Nothing
-      } $
-    \resS3 -> do
-      case statusCode $ responseStatus resS3 of
-        200 -> do
-          hashesS3 <- responseBody resS3 $$ pairSink
-          hashesHackage <-
-            withResponse hackagereq $ \res -> responseBody res $$ pairSink
-          when (hashesS3 /= hashesHackage) $
-            error $
-            "Mismatched hashes between S3 and Hackage: " ++
-            show (pkgFullName, hashesS3, hashesHackage)
-          return $ Just hashesS3
-        403 -> do
-          putStrLn $ "Skipping file not yet on S3: " ++ pack pkgFullName
-          return Nothing
-        _ ->
-          throwM $
-          StatusCodeException
-            (responseStatus resS3)
-            (responseHeaders resS3)
-            (responseCookieJar resS3)
-  let locations = [pack hackageurl, pack s3url]
+      (\resS3 ->
+          case statusCode $ responseStatus resS3 of
+            200 -> Just <$> pairSink
+            403 -> return Nothing
+            _ ->
+              throwM $
+              StatusCodeException
+                (responseStatus resS3)
+                (responseHeaders resS3)
+                (responseCookieJar resS3))
+  hashesHackage <- httpSink hackagereq (const pairSink)
+  case mhashes of
+    Just hashes ->
+      when (hashes /= hashesHackage) $
+      error $
+      "Mismatched hashes between S3 and Hackage: " ++
+      show (pkgFullName, hashes, hashesHackage)
+    Nothing -> putStrLn $ "Skipping file not yet on S3: " ++ pack pkgFullName
   return $
     case mhashes of
       Nothing -> Nothing
@@ -177,6 +156,7 @@ computePackage pkgName pkgVersion = do
           , packageSize = Identity size
           }
   where
+    locations = [pack hackageurl, pack s3url]
     pkgFullName = getPackageFullName pkgName pkgVersion
     hackageurl =
       concat

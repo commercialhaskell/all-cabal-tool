@@ -20,7 +20,6 @@ library
                      , Stackage.Package.Metadata
                      , Stackage.Package.Metadata.Types
                      , Stackage.Package.Update
---  other-modules:       
   build-depends:       base
                      , base16-bytestring
                      , bytestring
@@ -48,9 +47,11 @@ library
                      , transformers
                      , text
                      , yaml
-                     , zlib
+
+
+                     , deepseq
   default-language:    Haskell2010
-  ghc-options: -Wall
+  ghc-options:         -Wall
 
 executable all-cabal-tool
   hs-source-dirs:      app
@@ -64,21 +65,16 @@ executable all-cabal-tool
                      , amazonka-s3
                      , classy-prelude-conduit
                      , conduit-extra
-                     , cryptonite
-                     , cryptonite-conduit
                      , directory
-                     , filepath
                      , http-client
                      , http-conduit
                      , http-types
                      , lens
-                     , memory
                      , optparse-applicative
-                     , tar
                      , temporary
                      , zlib
   default-language:    Haskell2010
-  ghc-options: -Wall
+  ghc-options:         -Wall -threaded -rtsopts -with-rtsopts=-N2
 
 
 source-repository head
