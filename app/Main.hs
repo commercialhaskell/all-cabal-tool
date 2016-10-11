@@ -280,7 +280,7 @@ main = do
   Options {..} <- execParser (info optionsParser fullDesc)
   localPath <- maybe (getEnv "HOME") return oLocalPath
   eS3Bucket <- lookupEnv "S3_BUCKET"
-  let gitAccount = "lehins" -- "commercialhaskell"
+  let gitAccount = "commercialhaskell"
       delay = fromMaybe 60 oDelay * 1000000
       ms3Bucket = msum [oS3Bucket, eS3Bucket]
       gitUser =
