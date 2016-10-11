@@ -319,7 +319,7 @@ main = do
                        (SecretKey $ S8.pack awsSecretKey))
                     s3Bucket
                     (allCabalFiles repos)
-                (Just s3Bucket, Nothing, Nothing) ->
+                (Just s3Bucket, _, _) ->
                   updateIndex00 Discover s3Bucket (allCabalFiles repos)
                 _ -> return ())
         threadDelay delay
