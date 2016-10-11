@@ -21,7 +21,6 @@ library
                      , Stackage.Package.Metadata.Types
                      , Stackage.Package.Update
   build-depends:       base
-                     , base16-bytestring
                      , bytestring
                      , aeson
                      , Cabal
@@ -39,17 +38,12 @@ library
                      , http-conduit
                      , http-types
                      , memory
-                     , mtl
                      , pretty
                      , resourcet
                      , tar
                      , temporary
-                     , transformers
                      , text
                      , yaml
-
-
-                     , deepseq
   default-language:    Haskell2010
   ghc-options:         -Wall
 
