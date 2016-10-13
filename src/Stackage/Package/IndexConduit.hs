@@ -29,7 +29,7 @@ import Data.Aeson.Types as A hiding (parse)
 import qualified Data.ByteString.Lazy as L
 import qualified Data.ByteString.Lazy.Char8 as L8
 import qualified Data.Conduit.List as CL
-import Data.Conduit.Lazy (lazyConsume, MonadActive)
+import Data.Conduit.Lazy (lazyConsume)
 import Data.Conduit.Zlib
 --import Data.IORef (modifyIORef')
 import Data.Text.Encoding.Error (lenientDecode)
@@ -46,30 +46,8 @@ import Distribution.Version (VersionRange)
 import qualified Distribution.Text
 import Network.HTTP.Client.Conduit
 import Text.PrettyPrint (render)
-
-#if MIN_VERSION_http_conduit(2,2,1)
-import Network.HTTP.Simple (httpSource)
-#else
 import qualified Network.HTTP.Client as H
 import qualified Network.HTTP.Client.TLS as H
-
--- | For future compatibility, copied here from http-conduit-2.2.1
-httpSource
-  :: (MonadResource m, MonadIO n)
-  => Request
-  -> (Response (ConduitM i ByteString n ()) -> ConduitM i o m r)
-  -> ConduitM i o m r
-httpSource req withRes = do
-  man <- liftIO H.getGlobalManager
-  bracketP
-    (H.responseOpen req man)
-    H.responseClose
-    (withRes . fmap bodyReaderSource)
-#endif
-
-data StopException = StopException deriving Show
-
-instance Exception StopException
 
 -- | Download a tarball from a webserver, decompress, parse it and handle it
 -- using a provided `Sink`. Using a conditional function it is possible to
@@ -78,35 +56,23 @@ instance Exception StopException
 -- returned. That function also allows to return any value that depends on a
 -- `Response`.
 httpTarballSink
-  :: (MonadActive m, MonadCatch m, MonadResource m, MonadBaseControl IO m)
+  :: (MonadMask m, MonadIO m)
   => Request -- ^ Request to the tarball file.
   -> Bool -- ^ Is the tarball gzipped?
-  -> Sink Tar.Entry m b -- ^ The sink of how entries in the tar file should be
+  -> (Response () -> Sink Tar.Entry m a) -- ^ The sink of how entries in the tar file should be
      -- processed.
-  -> (Response () -> (Maybe a, Bool)) -- ^ This function allows to return a
-     -- value as a part of the result of `httpTarballSink`, as well as instruct
-     -- if further processing of the response should continue or not.
-  -> m (Maybe a, Maybe b)
-httpTarballSink req isCompressed tarSink onResp = do
-  retRef <- liftIO $ newIORef Nothing
-  let src =
-        httpSource req $
-        \res -> do
-          let (val, hasFuture) = onResp $ fmap (const ()) res
-          hasFutureStrict <- liftIO $ atomicModifyIORef' retRef (const (val, hasFuture))
-          unless hasFutureStrict $ throwM StopException
-          if isCompressed
-            then responseBody res =$= ungzip
-            else responseBody res
-  catch
-    (do tarChunks <- lazyConsume src
-        val <- liftIO $ (tarChunks `seq` readIORef retRef)
-        result <- (sourceEntries $ Tar.read $ L.fromChunks tarChunks) $$ tarSink
-        return (val, Just result)
-    )
-    (\(_ :: StopException) -> do
-        val <- liftIO $ readIORef retRef
-        return (val, Nothing))
+  -> m a
+httpTarballSink req isCompressed tarSink = do
+    man <- liftIO H.getGlobalManager
+    bracket (liftIO $ H.responseOpen req man) (liftIO . H.responseClose) $ \res -> do
+        let src' = bodyReaderSource $ H.responseBody res
+            src =
+                if isCompressed
+                    then src' =$= ungzip
+                    else src'
+            res_ = const () <$> res
+        tarChunks <- liftIO $ lazyConsume src
+        (sourceEntries $ Tar.read $ L.fromChunks tarChunks) $$ tarSink res_
 
 
 sourceEntries
