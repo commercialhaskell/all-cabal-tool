@@ -15,8 +15,6 @@ import qualified Codec.Archive.Tar as Tar
 import Control.Exception.Enclosed (tryAny)
 import Control.Monad (when, void)
 import Control.Monad.IO.Class (MonadIO(liftIO))
-import Control.Monad.Trans.Resource
-       (MonadBaseControl, runResourceT)
 import Crypto.Hash (hashlazy, SHA256(..))
 import qualified Data.ByteString.Lazy as L
 import Data.Conduit
@@ -81,14 +79,14 @@ sinkPackageVersions = CL.fold trackVersions Map.empty
 -- | Updates the metadata for packages using packages version information
 -- produced by `sinkPackageVersions` and cabal files from the second repo.
 updateMetadata
-  :: (MonadBaseControl IO m, MonadIO m)
+  :: (MonadIO m)
   => GitRepository -- ^ Matadata repository
   -> GitRepository -- ^ Repository that contains new cabal files, either
      -- all-cabal-files or all-cabal-hashes would work.
   -> Map PackageName (Set Version, Maybe VersionRange) -- ^ Packages version
      -- information
   -> m ()
-updateMetadata metadataRepo hashesRepo pkgVersions = do
+updateMetadata metadataRepo hashesRepo pkgVersions = liftIO $ do
   let fromVersions versionsMap
         | Map.null versionsMap = Nothing
         | otherwise = Just $ Map.deleteFindMin versionsMap
@@ -106,18 +104,15 @@ updateMetadata metadataRepo hashesRepo pkgVersions = do
                 else preferredVersionSet
         let pkgVersion = Set.findMax preferredVersionSetNonEmpty
         when (Set.null preferredVersionSet) $
-          liftIO $
           putStrLn $
           "Info: Package preferred version set is empty: " ++
           renderDistText pkgName ++
           ". Using all available versions for metadata."
         bls <-
-          liftIO $
           repoFileReader hashesRepo (getCabalFilePath pkgName pkgVersion) L.readFile
         return
           (getCabalFile pkgName pkgVersion bls, preferredVersionSetNonEmpty)
-  runResourceT $
-    CL.unfold fromVersions pkgVersions =$= CL.mapM readCabalFile $$
+  CL.unfold fromVersions pkgVersions =$= CL.mapM readCabalFile $$
     CL.mapM_ (updatePackageIfChanged metadataRepo)
 
 updatePackageIfChanged
@@ -127,8 +122,8 @@ updatePackageIfChanged _ (IndexFile {ifParsed = ParseFailed pe
                                     ,..}, _) =
   error $ show (ifPackageName, ifPackageVersion, pe)
 updatePackageIfChanged metadataRepo (IndexFile {ifParsed = ParseOk _ gpd
-                                               ,..}, versionSet) = do
-  epi <- liftIO $ repoFileReader metadataRepo fp decodeFileEither
+                                               ,..}, versionSet) = liftIO $ do
+  epi <- repoFileReader metadataRepo fp decodeFileEither
   when (Just pkgVersion /= ifPackageVersion) $
     error $
     "Internal error, metadata package update version mismatch: " ++
@@ -144,7 +139,6 @@ updatePackageIfChanged metadataRepo (IndexFile {ifParsed = ParseOk _ gpd
     -- Current version hasn't changed, hence data in the sdist.tar.gz is stil
     -- the same, updating cabal related info only.
       | pkgVersion == piLatest pi ->
-        liftIO $
         do repoFileWriter metadataRepo fp (void . tryAny . removeFile)
            repoFileWriter
              metadataRepo
@@ -160,7 +154,7 @@ updatePackageIfChanged metadataRepo (IndexFile {ifParsed = ParseOk _ gpd
                            , piLicenseName = pack $ renderDistText $ license pd
                            })
     -- Version update or a totally new package.
-    _ -> liftIO updatePackage
+    _ -> updatePackage
   where
     pkgNameStr = renderDistText ifPackageName
     pkgVersionStr = renderDistText pkgVersion
@@ -180,12 +174,7 @@ updatePackageIfChanged metadataRepo (IndexFile {ifParsed = ParseOk _ gpd
       | otherwise = fmap Just $ (CL.fold goEntry (pack $ description pd, "haddock", "", ""))
     updatePackage = do
       sdistReq <- parseRequest url
-      result <-
-        runResourceT $
-        httpTarballSink
-          sdistReq
-          True
-          sink
+      result <- httpTarballSink sdistReq True sink
       case result of
         Nothing -> putStrLn $ "Skipping: " ++ url
         Just (desc, desct, cl, clt) -> do

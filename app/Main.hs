@@ -204,7 +204,7 @@ processIndexUpdate
   -> m (Bool, Maybe ByteString)
 processIndexUpdate repos indexReq mlastEtag = do
   let indexReqWithEtag = maybe id (addRequestHeader "if-none-match") mlastEtag indexReq
-  runResourceT $ httpTarballSink
+  httpTarballSink
     indexReqWithEtag
     True
     (\res ->

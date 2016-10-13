@@ -48,7 +48,6 @@ import Network.HTTP.Client.Conduit
 import Text.PrettyPrint (render)
 import qualified Network.HTTP.Client as H
 import qualified Network.HTTP.Client.TLS as H
-import Control.Monad.Trans.Resource (allocate, release)
 
 -- | Download a tarball from a webserver, decompress, parse it and handle it
 -- using a provided `Sink`. Using a conditional function it is possible to
@@ -57,7 +56,7 @@ import Control.Monad.Trans.Resource (allocate, release)
 -- returned. That function also allows to return any value that depends on a
 -- `Response`.
 httpTarballSink
-  :: MonadResource m
+  :: (MonadMask m, MonadIO m)
   => Request -- ^ Request to the tarball file.
   -> Bool -- ^ Is the tarball gzipped?
   -> (Response () -> Sink Tar.Entry m a) -- ^ The sink of how entries in the tar file should be
@@ -65,17 +64,15 @@ httpTarballSink
   -> m a
 httpTarballSink req isCompressed tarSink = do
     man <- liftIO H.getGlobalManager
-    (releaseKey, res) <- allocate (H.responseOpen req man) H.responseClose
-    let src' = bodyReaderSource $ H.responseBody res
-        src =
-            if isCompressed
-                then src' =$= ungzip
-                else src'
-        res_ = const () <$> res
-    tarChunks <- liftIO $ lazyConsume src
-    x <- (sourceEntries $ Tar.read $ L.fromChunks tarChunks) $$ tarSink res_
-    release releaseKey
-    return x
+    bracket (liftIO $ H.responseOpen req man) (liftIO . H.responseClose) $ \res -> do
+        let src' = bodyReaderSource $ H.responseBody res
+            src =
+                if isCompressed
+                    then src' =$= ungzip
+                    else src'
+            res_ = const () <$> res
+        tarChunks <- liftIO $ lazyConsume src
+        (sourceEntries $ Tar.read $ L.fromChunks tarChunks) $$ tarSink res_
 
 
 sourceEntries
