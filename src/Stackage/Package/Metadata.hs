@@ -175,17 +175,17 @@ updatePackageIfChanged metadataRepo (IndexFile {ifParsed = ParseOk _ gpd
         , pkgVersionStr
         , ".tar.gz"
         ]
-    shouldContinue res =
-      (Nothing :: Maybe (), getResponseStatus res == status200)
+    sink res
+      | getResponseStatus res == status200 = return Nothing
+      | otherwise = fmap Just $ (CL.fold goEntry (pack $ description pd, "haddock", "", ""))
     updatePackage = do
       sdistReq <- parseRequest url
-      (Nothing, result) <-
+      result <-
         runResourceT $
         httpTarballSink
           sdistReq
           True
-          (CL.fold goEntry (pack $ description pd, "haddock", "", ""))
-          shouldContinue
+          sink
       case result of
         Nothing -> putStrLn $ "Skipping: " ++ url
         Just (desc, desct, cl, clt) -> do

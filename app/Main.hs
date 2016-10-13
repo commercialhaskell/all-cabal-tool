@@ -204,18 +204,14 @@ processIndexUpdate
   -> m (Bool, Maybe ByteString)
 processIndexUpdate repos indexReq mlastEtag = do
   let indexReqWithEtag = maybe id (addRequestHeader "if-none-match") mlastEtag indexReq
-  (mnewEtag, msunk) <- runResourceT $ httpTarballSink
+  runResourceT $ httpTarballSink
     indexReqWithEtag
     True
-    (allCabalUpdate repos)
     (\res ->
         case getResponseStatusCode res of
-          200 -> (listToMaybe $ getResponseHeader "etag" res, True)
-          304 -> (mlastEtag, False)
+          200 -> (True, listToMaybe $ getResponseHeader "etag" res) <$ allCabalUpdate repos
+          304 -> return (False, mlastEtag)
           _ -> error $ "Unexpected status: " ++ show (getResponseStatus res))
-  return $ case msunk of
-    Just _ -> (True, mnewEtag)
-    Nothing -> (False, mnewEtag)
 
 
 
