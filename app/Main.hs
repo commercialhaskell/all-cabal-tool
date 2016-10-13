@@ -26,7 +26,7 @@ import Network.HTTP.Simple
        (Request, parseRequest, addRequestHeader, getResponseStatus,
         getResponseStatusCode, getResponseHeader)
 import Options.Applicative
-import System.Environment (setEnv, getEnv, lookupEnv)
+import System.Environment (getEnv, lookupEnv)
 import System.Exit (ExitCode(..))
 import System.Directory (doesDirectoryExist)
 import System.IO.Temp (withSystemTempDirectory)
@@ -46,23 +46,25 @@ run dir cmd args = do
     (\Inherited Inherited Inherited -> return ())
 
 
--- | Similar to `run`, but will return the process' output as a `ByteString`.
-getOutput :: FilePath -> FilePath -> [String] -> IO ByteString
+-- | Executes a process and returns output to @(stdout, stderr)@
+getOutput :: FilePath -> FilePath -> [String] -> IO (LByteString, LByteString)
 getOutput dir cmd args = do
   putStrLn $
     concat ["Running in ", tshow dir, ": ", unwords $ map pack $ cmd : args]
-  (exitCode, out) <-
-    sourceProcessWithConsumer
+  (exitCode, out, err) <-
+    sourceProcessWithStreams
       (proc cmd args)
       { cwd = Just dir
       }
-      foldC
+      (yield "")
+      sinkLazyBuilder
+      sinkLazyBuilder
   case exitCode of
-    ExitSuccess -> return out
+    ExitSuccess -> return (out, err)
     code ->
       error $
       "Calling: " ++
-      showCommandForUser cmd args ++ " produced an error " ++ show code
+      showCommandForUser cmd args ++ " produced an error: " ++ show code
 
 
 -- | Clones the repo if it doesn't exists locally yet, otherwise pulls from it.
@@ -131,7 +133,7 @@ commitRepos Repositories {..} = do
 commitRepo :: IO String -> GitRepository -> IO ()
 commitRepo getCommitMsg GitRepository {..} = do
   run repoLocalPath "git" ["add", "-A"]
-  out <- getOutput repoLocalPath "git" ["status", "--porcelain"]
+  (out, _err) <- getOutput repoLocalPath "git" ["status", "--porcelain"]
   if null out
     then putStrLn $ "Info: Nothing to commit in " ++ pack repoLocalPath
     else do
@@ -280,7 +282,7 @@ main = do
   Options {..} <- execParser (info optionsParser fullDesc)
   localPath <- maybe (getEnv "HOME") return oLocalPath
   eS3Bucket <- lookupEnv "S3_BUCKET"
-  let gitAccount = "commercialhaskell"
+  let gitAccount = "lehins" -- "commercialhaskell"
       delay = fromMaybe 60 oDelay * 1000000
       ms3Bucket = msum [oS3Bucket, eS3Bucket]
       gitUser =
@@ -290,8 +292,8 @@ main = do
         , userGPG = oGPGSign
         }
   case (ms3Bucket, oAwsAccessKey, oAwsSecretKey) of
-    (Just _, Just accessKey, Nothing) -> setEnv "AWS_ACCESS_KEY_ID" accessKey
-    (Just _, Nothing, Just secretKey) -> setEnv "AWS_SECRET_KEY_ID" secretKey
+    (Just _, Just _, Nothing) -> error $ "--aws-secret-key is also required."
+    (Just _, Nothing, Just _) -> error $ "--aws-access-key is also required."
     (Nothing, _, _) ->
       putStrLn
         "WARNING: No s3-bucket is provided. Uploading of 00-index.tar.gz will be disabled."
