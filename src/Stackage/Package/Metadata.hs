@@ -170,7 +170,7 @@ updatePackageIfChanged metadataRepo (IndexFile {ifParsed = ParseOk _ gpd
         , ".tar.gz"
         ]
     sink res
-      | getResponseStatus res == status200 = return Nothing
+      | getResponseStatus res /= status200 = return Nothing
       | otherwise = fmap Just $ (CL.fold goEntry (pack $ description pd, "haddock", "", ""))
     updatePackage = do
       sdistReq <- parseRequest url
