@@ -174,7 +174,7 @@ getRepos path account gitUser = do
 
 -- | Upload an oldstyle '00-index.tar.gz' (i.e. without package.json files) to
 -- an S3 bucket.
-updateIndex00 :: Credentials -> String -> GitRepository -> IO ()
+updateIndex00 :: Credentials -> BucketName -> GitRepository -> IO ()
 updateIndex00 awsCreds bucketName GitRepository {repoTag = Just tag
                                        ,..} = do
   env <- newEnv NorthVirginia awsCreds
@@ -190,7 +190,7 @@ updateIndex00 awsCreds bucketName GitRepository {repoTag = Just tag
        let key = ObjectKey "00-index.tar.gz"
            po =
              set poACL (Just OPublicRead) $
-             putObject (BucketName $ pack bucketName) key (toBody index00)
+             putObject bucketName key (toBody index00)
        eres <- runResourceT $ runAWS env $ trying _Error $ send po
        case eres of
          Left e -> error $ show (key, e)
@@ -217,6 +217,7 @@ processIndexUpdate repos indexReq mlastEtag = do
 
 
 
+type AWSInfo = (BucketName, Maybe Credentials)
 
 data Options = Options
                { oUsername :: String
@@ -224,10 +225,27 @@ data Options = Options
                , oGPGSign :: String
                , oLocalPath :: Maybe FilePath -- default $HOME
                , oDelay :: Maybe Int -- default 60 seconds
-               , oAwsAccessKey :: Maybe String -- default $AWS_ACCESS_KEY_ID
-               , oAwsSecretKey :: Maybe String -- default $AWS_SECRET_KEY_ID
-               , oS3Bucket :: Maybe String -- default $S3_BUCKET
+               , oS3Bucket :: Maybe BucketName
+               , oAwsCredentials :: Credentials
                }
+
+
+awsCredentialsParser :: Parser Credentials
+awsCredentialsParser =
+  FromKeys <$>
+  ((AccessKey . S8.pack) <$>
+   strOption
+     (long "aws-access-key" <>
+      help
+        ("Access key for uploading 00-index.tar.gz " ++
+         "(Default is $AWS_ACCESS_KEY_ID environment variable)"))) <*>
+  ((SecretKey . S8.pack) <$>
+   strOption
+     (long "aws-secret-key" <>
+      help
+        ("Secret key for uploading 00-index.tar.gz " ++
+         "(Default is $AWS_SECRET_KEY_ID environment variable)")))
+  <|> pure Discover
 
 
 optionsParser :: Parser Options
@@ -250,25 +268,14 @@ optionsParser =
          help
            ("Delay in seconds before next check for a new version " ++
             "of 01-index.tar.gz file")))) <*>
-  (optional
-     (strOption
-        (long "aws-access-key" <>
-         help
-           ("Access key for uploading 00-index.tar.gz " ++
-            "(Default is $AWS_ACCESS_KEY_ID environment variable)")))) <*>
-  (optional
-     (strOption
-        (long "aws-secret-key" <>
-         help
-           ("Secret key for uploading 00-index.tar.gz " ++
-            "(Default is $AWS_SECRET_KEY_ID environment variable)")))) <*>
-  (optional
+  (optional ((BucketName . pack) <$> 
      (strOption
         (long "s3-bucket" <>
          help
            ("Access key for uploading 00-index.tar.gz. " ++
             "If none, uploading will be skipped. " ++
-            "(Default is $S3_BUCKET environment variable)")))) <*
+            "(Default is $S3_BUCKET environment variable)"))))) <*>
+  awsCredentialsParser <*
   abortOption ShowHelpText (long "help" <> help "Display this help text.")
 
 
@@ -278,22 +285,18 @@ main = do
   Options {..} <- execParser (info optionsParser fullDesc)
   localPath <- maybe (getEnv "HOME") return oLocalPath
   eS3Bucket <- lookupEnv "S3_BUCKET"
-  let gitAccount = "lehins" -- "commercialhaskell"
+  let gitAccount = "commercialhaskell"
       delay = fromMaybe 60 oDelay * 1000000
-      ms3Bucket = msum [oS3Bucket, eS3Bucket]
+      ms3Bucket = msum [oS3Bucket, (BucketName . pack) <$> eS3Bucket]
       gitUser =
         GitUser
         { userName = oUsername
         , userEmail = oEmail
         , userGPG = oGPGSign
         }
-  case (ms3Bucket, oAwsAccessKey, oAwsSecretKey) of
-    (Just _, Just _, Nothing) -> error $ "--aws-secret-key is also required."
-    (Just _, Nothing, Just _) -> error $ "--aws-access-key is also required."
-    (Nothing, _, _) ->
-      putStrLn
-        "WARNING: No s3-bucket is provided. Uploading of 00-index.tar.gz will be disabled."
-    _ -> return ()
+  when (isNothing ms3Bucket) $
+    putStrLn
+      "WARNING: No s3-bucket is provided. Uploading of 00-index.tar.gz will be disabled."
   indexReq <- parseRequest $ mirrorFPComplete ++ "/01-index.tar.gz"
   repos <- getRepos localPath gitAccount gitUser
   let loop mlastEtag = do
@@ -309,16 +312,9 @@ main = do
         when
           updated
           (do commitRepos repos
-              case (ms3Bucket, oAwsAccessKey, oAwsSecretKey) of
-                (Just s3Bucket, Just awsAccessKey, Just awsSecretKey) ->
-                  updateIndex00
-                    (FromKeys
-                       (AccessKey $ S8.pack awsAccessKey)
-                       (SecretKey $ S8.pack awsSecretKey))
-                    s3Bucket
-                    (allCabalFiles repos)
-                (Just s3Bucket, _, _) ->
-                  updateIndex00 Discover s3Bucket (allCabalFiles repos)
+              case ms3Bucket of
+                Just s3Bucket ->
+                  updateIndex00 oAwsCredentials s3Bucket (allCabalFiles repos)
                 _ -> return ())
         threadDelay delay
         loop mnewEtag
