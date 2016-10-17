@@ -11,7 +11,7 @@ import qualified Data.ByteString.Lazy as L
 import Control.Monad.IO.Class (MonadIO(liftIO))
 import Data.Aeson as A (encode)
 import qualified Data.Conduit.List as CL
-import qualified Data.Map as Map
+import qualified Data.Map.Strict as Map
 import Data.Yaml as Y (encode)
 import Network.HTTP.Simple (parseRequest, httpJSONEither, getResponseBody)
 

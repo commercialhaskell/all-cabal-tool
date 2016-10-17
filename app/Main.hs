@@ -225,6 +225,7 @@ main = do
                  "ERROR: Received an unexpected exception while updating repositories: " ++
                  show e
                return mlastEtag)
-        threadDelay delay
-        loop mnewEtag
+        return ()
+        --threadDelay delay
+        --loop mnewEtag
   loop Nothing
