@@ -31,7 +31,6 @@ import qualified Data.ByteString.Lazy.Char8 as L8
 import qualified Data.Conduit.List as CL
 import Data.Conduit.Lazy (lazyConsume)
 import Data.Conduit.Zlib
---import Data.IORef (modifyIORef')
 import Data.Text.Encoding.Error (lenientDecode)
 import qualified Data.Text.Lazy as TL (stripPrefix)
 import Data.Text.Lazy.Encoding (decodeUtf8With)

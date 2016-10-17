@@ -33,16 +33,21 @@ library
                      , directory
                      , enclosed-exceptions
                      , filepath
+                     , hit
+                     , hourglass
                      , http-client
                      , http-client-tls
                      , http-conduit
                      , http-types
                      , memory
                      , pretty
+                     , process
                      , resourcet
+                     , system-filepath
                      , tar
                      , temporary
                      , text
+                     , utf8-string
                      , yaml
   default-language:    Haskell2010
   ghc-options:         -Wall
@@ -68,7 +73,7 @@ executable all-cabal-tool
                      , temporary
                      , zlib
   default-language:    Haskell2010
-  ghc-options:         -Wall -threaded -rtsopts -with-rtsopts=-N2
+  ghc-options:         -Wall -threaded -rtsopts -with-rtsopts=-N
 
 
 source-repository head

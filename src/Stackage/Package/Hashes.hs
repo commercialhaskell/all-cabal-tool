@@ -27,7 +27,6 @@ import Network.HTTP.Client.Conduit
         responseCookieJar, responseHeaders, responseStatus)
 import Network.HTTP.Types (statusCode)
 import Network.HTTP.Simple (httpSink)
-import System.Directory
 import System.FilePath (dropExtension)
 
 import Stackage.Package.Locations
@@ -71,27 +70,25 @@ entryUpdateHashes _ _ = return ()
 createHashesIfMissing
   :: (MonadMask m, MonadIO m)
   => GitRepository -> PackageName -> Version -> m (Maybe (Package Identity))
-createHashesIfMissing hashesRepo pkgName pkgVersion = do
-  let jsonfp = dropExtension (getCabalFilePath pkgName pkgVersion) <.> "json"
-  exists <- liftIO $ repoFileReader hashesRepo jsonfp doesFileExist
-  mpackageHashes <-
-    if exists
-      then do
-        res <- liftIO $ repoFileReader hashesRepo jsonfp readFile
-        case eitherDecode' res of
-          Left e -> error $ concat ["Could not parse ", jsonfp, ": ", e]
-          Right x -> return $ flatten x
-      else return Nothing
-  case mpackageHashes of
-    Just packageHashes -> return $ Just packageHashes
-    Nothing -> do
-      mpackageComputed <- computePackage pkgName pkgVersion
-      case mpackageComputed of
-        Nothing -> return Nothing
-        Just packageHashes -> do
-          liftIO $
-            repoFileWriter hashesRepo jsonfp (`writeFile` encode packageHashes)
-          return $ Just packageHashes
+createHashesIfMissing hashesRepo pkgName pkgVersion =
+  liftIO $
+  do let jsonfp = dropExtension (getCabalFilePath pkgName pkgVersion) <.> "json"
+     meres <- (fmap eitherDecode') <$> repoReadFile hashesRepo jsonfp
+     let mpackageHashes =
+           case meres of
+             (Just (Left e)) ->
+               error $ concat ["Could not parse ", jsonfp, ": ", e]
+             (Just (Right x)) -> flatten x
+             _ -> Nothing
+     case mpackageHashes of
+       Just packageHashes -> return $ Just packageHashes
+       Nothing -> do
+         mpackageComputed <- computePackage pkgName pkgVersion
+         case mpackageComputed of
+           Nothing -> return Nothing
+           Just packageHashes -> do
+             repoWriteFile_ hashesRepo jsonfp (encode packageHashes)
+             return $ Just packageHashes
 
 -- | Kinda like sequence, except not.
 flatten :: Package Maybe -> Maybe (Package Identity)

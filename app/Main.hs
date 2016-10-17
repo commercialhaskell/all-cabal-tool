@@ -9,7 +9,6 @@ module Main where
 
 import ClassyPrelude.Conduit hiding ((<>))
 import Data.Conduit.Lazy (MonadActive)
-import Data.Conduit.Process
 import Data.Conduit.Zlib (gzip)
 import qualified Data.ByteString.Char8 as S8 (pack)
 import Control.Lens (set)
@@ -27,132 +26,40 @@ import Network.HTTP.Simple
         getResponseStatusCode, getResponseHeader)
 import Options.Applicative
 import System.Environment (getEnv, lookupEnv)
-import System.Exit (ExitCode(..))
-import System.Directory (doesDirectoryExist)
 import System.IO.Temp (withSystemTempDirectory)
 
 import Stackage.Package.Update
 import Stackage.Package.Locations
 import Stackage.Package.IndexConduit
 
-run :: FilePath -> FilePath -> [String] -> IO ()
-run dir cmd args = do
-  putStrLn $
-    concat ["Running in ", tshow dir, ": ", unwords $ map pack $ cmd : args]
-  withCheckedProcessCleanup
-    (proc cmd args)
-    { cwd = Just dir
-    }
-    (\Inherited Inherited Inherited -> return ())
-
-
--- | Executes a process and returns output to @(stdout, stderr)@
-getOutput :: FilePath -> FilePath -> [String] -> IO (LByteString, LByteString)
-getOutput dir cmd args = do
-  putStrLn $
-    concat ["Running in ", tshow dir, ": ", unwords $ map pack $ cmd : args]
-  (exitCode, out, err) <-
-    sourceProcessWithStreams
-      (proc cmd args)
-      { cwd = Just dir
-      }
-      (yield "")
-      sinkLazyBuilder
-      sinkLazyBuilder
-  case exitCode of
-    ExitSuccess -> return (out, err)
-    code ->
-      error $
-      "Calling: " ++
-      showCommandForUser cmd args ++ " produced an error: " ++ show code
-
-
--- | Clones the repo if it doesn't exists locally yet, otherwise pulls from it.
-ensureGitRepository
-  :: String -- ^ Git provider ex. "github.com"
-  -> String -- ^ Repository account ex. "commercialhaskell"
-  -> GitUser -- ^ User information to be used for the commits.
-  -> String -- ^ Repository name ex. "all-cabal-files"
-  -> String -- ^ Repository branch ex. "master"
-  -> FilePath -- ^ Location in the file system where
-     -- repository should be cloned to.
-  -> IO GitRepository
-ensureGitRepository repoHost repoAccount gitUser repoName repoBranch repoBasePath = do
-  exists <- doesDirectoryExist repoLocalPath
-  if exists
-    then do
-      run repoLocalPath "git" ["clean", "-fdx"]
-      run repoLocalPath "git" ["remote", "set-url", "origin", repoAddress]
-      run repoLocalPath "git" ["fetch"]
-      run repoLocalPath "git" ["checkout", "origin/" ++ repoBranch]
-      run repoLocalPath "git" ["branch", "-D", repoBranch]
-      run repoLocalPath "git" ["checkout", "-b", repoBranch]
-      run repoLocalPath "git" ["branch", "-u", "origin/" ++ repoBranch]
-      run repoLocalPath "git" ["clean", "-fdx"]
-    else run
-           "."
-           "git"
-           [ "clone"
-           , "--depth=1"
-           , repoAddress
-           , repoLocalPath
-           , "--branch"
-           , repoBranch
-           ]
-  run repoLocalPath "git" ["config", "user.name", userName gitUser]
-  run repoLocalPath "git" ["config", "user.email", userEmail gitUser]
-  run repoLocalPath "git" ["config", "core.autocrlf", "input"]
-  return repo
-  where
-    repo =
-      GitRepository
-      { repoAddress = repoAddress
-      , repoBranch = repoBranch
-      , repoUser = gitUser
-      , repoTag = Nothing
-      , repoLocalPath = repoLocalPath
-      }
-    repoLocalPath = repoBasePath </> repoName
-    repoAddress =
-      concat ["git@", repoHost, ":", repoAccount, "/", repoName, ".git"]
-
 
 -- | Commit and push all changes to the repositories.
-commitRepos :: Repositories -- ^ All three repositories
-            -> IO ()
-commitRepos Repositories {..} = do
-  let getCommitMsg = do
-        utcTime <- formatTime defaultTimeLocale "%FT%TZ" <$> getCurrentTime
-        return $ "Update from Hackage at " ++ utcTime
-  mapM_
-    (commitRepo getCommitMsg)
-    [allCabalFiles, allCabalHashes, allCabalMetadata]
-    
-
-
-commitRepo :: IO String -> GitRepository -> IO ()
-commitRepo getCommitMsg GitRepository {..} = do
-  run repoLocalPath "git" ["add", "-A"]
-  (out, _err) <- getOutput repoLocalPath "git" ["status", "--porcelain"]
-  if null out
-    then putStrLn $ "Info: Nothing to commit in " ++ pack repoLocalPath
-    else do
-      commitMsg <- getCommitMsg
+pushRepos :: Repositories -- ^ All three repositories
+          -> ByteString -- ^ Commit and tag message.
+          -> IO Repositories
+pushRepos Repositories {..} message = do
+  let repos = [allCabalFiles, allCabalHashes, allCabalMetadata]
+  repos' <-
+    forM repos $
+    \repo@GitRepository {..} -> do
+      repo' <- repoCommit repo message
       run
         repoLocalPath
         "git"
-        ["commit", "-m", commitMsg, "--gpg-sign=" ++ userGPG repoUser]
-      run repoLocalPath "git" ["push", repoAddress, "HEAD:" ++ repoBranch]
-      forM_
-        repoTag
-        (\tag -> do
-           run
-             repoLocalPath
-             "git"
-             ["tag", tag, "-u", userGPG repoUser, "-m", commitMsg, "-f"]
-           run repoLocalPath "git" ["push", repoAddress, "--tags", "--force"])
-
-
+        ["push", repoAddress, concat [repoBranch, ":", repoBranch]]
+      -- Tag newly created commit with the same message.
+      repoTag repo message
+      run repoLocalPath "git" ["push", repoAddress, "--tags", "--force"]
+      return repo'
+  let [allCabalFiles', allCabalHashes', allCabalMetadata'] =
+        zipWith fromMaybe repos repos'
+  return $
+    Repositories
+    { allCabalFiles = allCabalFiles'
+    , allCabalHashes = allCabalHashes'
+    , allCabalMetadata = allCabalMetadata'
+    }
+    
 
 
 getRepos :: FilePath -> String -> GitUser -> IO Repositories
@@ -166,8 +73,8 @@ getRepos path account gitUser = do
     ensureGitRepository host account gitUser "all-cabal-metadata" "master" path
   return
     Repositories
-    { allCabalFiles = allCabalFiles {repoTag = Just "current-hackage" }
-    , allCabalHashes = allCabalHashes {repoTag = Just "current-hackage" }
+    { allCabalFiles = allCabalFiles {repoTagName = Just "current-hackage" }
+    , allCabalHashes = allCabalHashes {repoTagName = Just "current-hackage" }
     , allCabalMetadata = allCabalMetadata
     }
   
@@ -175,7 +82,7 @@ getRepos path account gitUser = do
 -- | Upload an oldstyle '00-index.tar.gz' (i.e. without package.json files) to
 -- an S3 bucket.
 updateIndex00 :: Credentials -> BucketName -> GitRepository -> IO ()
-updateIndex00 awsCreds bucketName GitRepository {repoTag = Just tag
+updateIndex00 awsCreds bucketName GitRepository {repoTagName = Just tag
                                        ,..} = do
   env <- newEnv NorthVirginia awsCreds
   withSystemTempDirectory
@@ -285,7 +192,7 @@ main = do
   Options {..} <- execParser (info optionsParser fullDesc)
   localPath <- maybe (getEnv "HOME") return oLocalPath
   eS3Bucket <- lookupEnv "S3_BUCKET"
-  let gitAccount = "commercialhaskell"
+  let gitAccount = "lehins" -- "commercialhaskell"
       delay = fromMaybe 60 oDelay * 1000000
       ms3Bucket = msum [oS3Bucket, (BucketName . pack) <$> eS3Bucket]
       gitUser =
@@ -294,13 +201,17 @@ main = do
         , userEmail = oEmail
         , userGPG = oGPGSign
         }
+      getCommitMessage = do
+        utcTime <- formatTime defaultTimeLocale "%FT%TZ" <$> getCurrentTime
+        return $ fromString $ "Update from Hackage at " ++ utcTime
   when (isNothing ms3Bucket) $
     putStrLn
       "WARNING: No s3-bucket is provided. Uploading of 00-index.tar.gz will be disabled."
   indexReq <- parseRequest $ mirrorFPComplete ++ "/01-index.tar.gz"
-  repos <- getRepos localPath gitAccount gitUser
-  let loop mlastEtag = do
+  gitRepositories <- getRepos localPath gitAccount gitUser
+  let loop repos mlastEtag = do
         putStrLn $ "Checking index, etag == " ++ tshow mlastEtag
+        commitMessage <- getCommitMessage
         (updated, mnewEtag) <-
           catchAnyDeep
             (processIndexUpdate repos indexReq mlastEtag)
@@ -309,13 +220,17 @@ main = do
                  "ERROR: Received an unexpected exception while updating the repositories: " ++
                  show e
                return (False, mlastEtag))
-        when
-          updated
-          (do commitRepos repos
+        updatedRepos <-
+          if updated && False
+            then do
+              repos' <- pushRepos repos commitMessage
               case ms3Bucket of
                 Just s3Bucket ->
                   updateIndex00 oAwsCredentials s3Bucket (allCabalFiles repos)
-                _ -> return ())
+                _ -> return ()
+              return repos'
+            else do
+              return repos
         threadDelay delay
-        loop mnewEtag
-  loop Nothing
+        loop updatedRepos mnewEtag
+  loop gitRepositories Nothing
