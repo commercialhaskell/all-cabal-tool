@@ -6,13 +6,12 @@ module Stackage.Package.Update where
 
 import ClassyPrelude.Conduit
 import qualified Codec.Archive.Tar as Tar
-import qualified Data.ByteString as S
 import qualified Data.ByteString.Lazy as L
 import Control.Monad.IO.Class (MonadIO(liftIO))
 import Data.Aeson as A (encode)
 import qualified Data.Conduit.List as CL
-import Data.Yaml as Y (decodeEither', encodeFile)
-import Network.HTTP.Simple (parseRequest, httpSink)
+import Data.Yaml as Y (encodeFile)
+import Network.HTTP.Simple (parseRequest, httpJSONEither, getResponseBody)
 
 import Stackage.Package.IndexConduit
 import Stackage.Package.Locations
@@ -27,18 +26,16 @@ import System.FilePath (takeExtension)
 saveDeprecated :: [(GitRepository, FilePath)] -> IO ()
 saveDeprecated repos = do
   deprecatedJsonReq <- parseRequest hackageDeprecatedUrl
-  bs <- httpSink deprecatedJsonReq (const $ CL.foldMap id)
-  deps <- either throwM return $ Y.decodeEither' bs :: IO [Deprecation]
+  edeprecated <- getResponseBody <$> httpJSONEither deprecatedJsonReq
+  deprecated <- either throwM return edeprecated :: IO [Deprecation]
   forM_
     repos
     (\(repo, filename) -> do
        let writeAs ext
              | ext `elem` [".yaml", ".yml"] -- save as YAML
-              = repoFileWriter repo filename (`Y.encodeFile` deps)
-             | ext == ".json" -- save as JSON
-              = repoFileWriter repo filename (`L.writeFile` A.encode deps)
-             | otherwise -- save the raw downloaded bytestring
-              = repoFileWriter repo filename (`S.writeFile` bs)
+              = repoFileWriter repo filename (`Y.encodeFile` deprecated)
+             | otherwise -- save as JSON
+              = repoFileWriter repo filename (`L.writeFile` A.encode deprecated)
        writeAs (toLower $ takeExtension filename))
 
 -- | Saves '.cabal' files together with 'preferred-version', but ignores
