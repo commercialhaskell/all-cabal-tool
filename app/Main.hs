@@ -35,54 +35,46 @@ import Stackage.Package.IndexConduit
 
 -- | Commit and push all changes to the repositories.
 pushRepos :: Repositories -- ^ All three repositories
-          -> ByteString -- ^ Commit and tag message.
-          -> IO Repositories
+          -> ByteString -- ^ Message to be used for both commit and a tag.
+          -> IO ()
 pushRepos Repositories {..} message = do
-  let repos = [allCabalFiles, allCabalHashes, allCabalMetadata]
-  repos' <-
-    forM repos $
-    \repo@GitRepository {..} -> do
-      repo' <- repoCommit repo message
+  forM_ [allCabalFiles, allCabalHashes, allCabalMetadata] $
+    \repo@Repository {repoInfo = GitInfo {..}} -> do
+      repoCommit repo message
       run
-        repoLocalPath
+        gitLocalPath
         "git"
-        ["push", repoAddress, concat [repoBranch, ":", repoBranch]]
+        ["push", gitAddress, concat [gitBranchName, ":", gitBranchName]]
       -- Tag newly created commit with the same message.
       repoTag repo message
-      run repoLocalPath "git" ["push", repoAddress, "--tags", "--force"]
-      return repo'
-  let [allCabalFiles', allCabalHashes', allCabalMetadata'] =
-        zipWith fromMaybe repos repos'
-  return $
-    Repositories
-    { allCabalFiles = allCabalFiles'
-    , allCabalHashes = allCabalHashes'
-    , allCabalMetadata = allCabalMetadata'
-    }
+      run gitLocalPath "git" ["push", gitAddress, "--tags", "--force"]
     
 
 
-getRepos :: FilePath -> String -> GitUser -> IO Repositories
-getRepos path account gitUser = do
-  let host = "github.com"      
-  allCabalFiles <-
-    ensureGitRepository host account gitUser "all-cabal-files" "hackage" path
-  allCabalHashes <-
-    ensureGitRepository host account gitUser "all-cabal-hashes" "hackage" path
-  allCabalMetadata <-
-    ensureGitRepository host account gitUser "all-cabal-metadata" "master" path
+getReposInfo :: FilePath -> String -> GitUser -> IO (GitInfo, GitInfo, GitInfo)
+getReposInfo path account gitUser = do
+  let host = "github.com"
+  allCabalFilesInfo <-
+    ensureRepository host account gitUser "all-cabal-files" "hackage" path
+  allCabalHashesInfo <-
+    ensureRepository host account gitUser "all-cabal-hashes" "hackage" path
+  allCabalMetadataInfo <-
+    ensureRepository host account gitUser "all-cabal-metadata" "master" path
   return
-    Repositories
-    { allCabalFiles = allCabalFiles {repoTagName = Just "current-hackage" }
-    , allCabalHashes = allCabalHashes {repoTagName = Just "current-hackage" }
-    , allCabalMetadata = allCabalMetadata
-    }
+    ( allCabalFilesInfo
+      { gitTagName = Just "current-hackage"
+      }
+    , allCabalHashesInfo
+      { gitTagName = Just "current-hackage"
+      }
+    , allCabalMetadataInfo)
   
-
+updateIndex00 = undefined
+{-
 -- | Upload an oldstyle '00-index.tar.gz' (i.e. without package.json files) to
 -- an S3 bucket.
-updateIndex00 :: Credentials -> BucketName -> GitRepository -> IO ()
-updateIndex00 awsCreds bucketName GitRepository {repoTagName = Just tag
+updateIndex00 :: Credentials -> BucketName -> Repository -> IO ()
+updateIndex00 awsCreds bucketName Repository {repoTagName = Just tag
                                        ,..} = do
   env <- newEnv NorthVirginia awsCreds
   withSystemTempDirectory
@@ -103,7 +95,7 @@ updateIndex00 awsCreds bucketName GitRepository {repoTagName = Just tag
          Left e -> error $ show (key, e)
          Right _ -> putStrLn "Success")
 updateIndex00 _ _ _ = return ()
-
+-}
 
 processIndexUpdate
   :: (MonadActive m, MonadIO m, MonadMask m, MonadBaseControl IO m)
@@ -208,29 +200,31 @@ main = do
     putStrLn
       "WARNING: No s3-bucket is provided. Uploading of 00-index.tar.gz will be disabled."
   indexReq <- parseRequest $ mirrorFPComplete ++ "/01-index.tar.gz"
-  gitRepositories <- getRepos localPath gitAccount gitUser
-  let loop repos mlastEtag = do
+  reposInfo <- getReposInfo localPath gitAccount gitUser
+  let loop mlastEtag = do
         putStrLn $ "Checking index, etag == " ++ tshow mlastEtag
-        commitMessage <- getCommitMessage
-        (updated, mnewEtag) <-
+        mnewEtag <-
           catchAnyDeep
-            (processIndexUpdate repos indexReq mlastEtag)
+            (withRepositories reposInfo $
+             \repos -> do
+               commitMessage <- getCommitMessage
+               (updated, mnewEtag) <-
+                 (processIndexUpdate repos indexReq mlastEtag)
+               when (updated && False) $
+                 do pushRepos repos commitMessage
+                    case ms3Bucket of
+                      Just s3Bucket ->
+                        updateIndex00
+                          oAwsCredentials
+                          s3Bucket
+                          (allCabalFiles repos)
+                      _ -> return ()
+               return mnewEtag)
             (\e -> do
                hPutStrLn stderr $
-                 "ERROR: Received an unexpected exception while updating the repositories: " ++
+                 "ERROR: Received an unexpected exception while updating repositories: " ++
                  show e
-               return (False, mlastEtag))
-        updatedRepos <-
-          if updated && False
-            then do
-              repos' <- pushRepos repos commitMessage
-              case ms3Bucket of
-                Just s3Bucket ->
-                  updateIndex00 oAwsCredentials s3Bucket (allCabalFiles repos)
-                _ -> return ()
-              return repos'
-            else do
-              return repos
+               return mlastEtag)
         threadDelay delay
-        loop updatedRepos mnewEtag
-  loop gitRepositories Nothing
+        loop mnewEtag
+  loop Nothing

@@ -25,7 +25,7 @@ import System.FilePath (takeExtension)
 -- | Download '<repo>/packages/deprecated.json' file from Hackage, parse it and save it
 -- in the repositories under supplied names. Format "yaml" or "json" is guessed
 -- from the file extension.
-saveDeprecated :: [(GitRepository, FilePath)] -> IO ()
+saveDeprecated :: [(Repository, FilePath)] -> IO ()
 saveDeprecated repos = do
   deprecatedJsonReq <- parseRequest hackageDeprecatedUrl
   edeprecated <- getResponseBody <$> httpJSONEither deprecatedJsonReq
@@ -35,20 +35,20 @@ saveDeprecated repos = do
     (\(repo, filename) -> do
        let writeAs ext
              | ext `elem` [".yaml", ".yml"] -- save as YAML
-              = repoWriteFile_ repo filename . L.fromStrict $ Y.encode deprecated
+              = repoWriteFile repo filename . L.fromStrict $ Y.encode deprecated
              | otherwise -- save as JSON
-              = repoWriteFile_ repo filename (A.encode deprecated)
+              = repoWriteFile repo filename (A.encode deprecated)
        writeAs (toLower $ takeExtension filename))
 
 
 -- | Saves '.cabal' files together with 'preferred-version', but ignores
 -- 'package.json'
 entryUpdateFile
-  :: MonadIO m => GitRepository -> IndexFileEntry -> m ()
+  :: MonadIO m => Repository -> IndexFileEntry -> m ()
 entryUpdateFile allCabalRepo (CabalFileEntry IndexFile {..}) = do
-  liftIO $ repoWriteFile_ allCabalRepo ifPath ifRaw
+  liftIO $ repoWriteFile allCabalRepo ifPath ifRaw
 entryUpdateFile allCabalRepo (PreferredVersionsEntry IndexFile {..}) = do
-  liftIO $ repoWriteFile_ allCabalRepo ifPath ifRaw
+  liftIO $ repoWriteFile allCabalRepo ifPath ifRaw
 entryUpdateFile _ _ = return ()
 
 
