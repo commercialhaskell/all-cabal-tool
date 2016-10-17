@@ -32,6 +32,7 @@ import Data.Conduit.Process
         Inherited(Inherited))
 import ClassyPrelude.Conduit (sourceLazy, sinkLazyBuilder)
 import Data.Git
+import Data.Git.Ref (fromHex)
 import Data.Git.Repository
 import Data.Git.Storage.Object
 import Data.Git.Storage.Loose
@@ -146,8 +147,15 @@ repoReadFile' repo@Repository {repoInfo = GitInfo {..}} fp = do
 -- finilize the changes. Returns `GitFile` that can be used to read the contents
 -- of the file back at any time with the help of `readGitFile`.
 repoWriteFile :: Repository -> FilePath -> L.ByteString -> IO ()
-repoWriteFile Repository {repoInstance = GitInstance {..}} fp blob = do
+repoWriteFile Repository {repoInstance = GitInstance {..}
+                         ,repoInfo = GitInfo {..}} fp blob = do
   newRef <- setObject gitRepo (ObjBlob (Blob blob))
+  {-(newRef, _) <-
+    runPipe
+      gitLocalPath
+      "git"
+      ["hash-object", "-w", "-t", "blob", "--path=" ++ fp, "--stdin"]
+      blob -}
   workTreeSet gitRepo gitWorkTree (toEntPath fp) (EntFile, newRef)
 
 
@@ -356,7 +364,7 @@ run
   -> [String] -- ^ Arguments
   -> IO ()
 run dir cmd args = do
-  putStrLn $ concat ["Running in ", dir, ": ", showCommandForUser cmd args]
+  --putStrLn $ concat ["Running in ", dir, ": ", showCommandForUser cmd args]
   withCheckedProcessCleanup
     (proc cmd args)
     { cwd = Just dir
@@ -373,7 +381,7 @@ runPipe
   -> L.ByteString -- ^ @stdin@
   -> IO (L.ByteString, L.ByteString)
 runPipe dir cmd args input = do
-  putStrLn $ concat ["Running in ", dir, ": ", showCommandForUser cmd args]
+  --putStrLn $ concat ["Running in ", dir, ": ", showCommandForUser cmd args]
   (exitCode, out, err) <-
     sourceProcessWithStreams
       (proc cmd args)
