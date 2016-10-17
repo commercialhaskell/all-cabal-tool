@@ -1,18 +1,19 @@
 {-# LANGUAGE FlexibleContexts #-}
 {-# LANGUAGE RecordWildCards #-}
 {-# LANGUAGE NoImplicitPrelude #-}
+{-# LANGUAGE ViewPatterns #-}
 
 module Stackage.Package.Update where
 
 import ClassyPrelude.Conduit
 import qualified Codec.Archive.Tar as Tar
-import qualified Data.ByteString as S
 import qualified Data.ByteString.Lazy as L
 import Control.Monad.IO.Class (MonadIO(liftIO))
 import Data.Aeson as A (encode)
 import qualified Data.Conduit.List as CL
-import Data.Yaml as Y (decodeEither', encodeFile)
-import Network.HTTP.Simple (parseRequest, httpSink)
+import qualified Data.Map as Map
+import Data.Yaml as Y (encode)
+import Network.HTTP.Simple (parseRequest, httpJSONEither, getResponseBody)
 
 import Stackage.Package.IndexConduit
 import Stackage.Package.Locations
@@ -27,29 +28,36 @@ import System.FilePath (takeExtension)
 saveDeprecated :: [(GitRepository, FilePath)] -> IO ()
 saveDeprecated repos = do
   deprecatedJsonReq <- parseRequest hackageDeprecatedUrl
-  bs <- httpSink deprecatedJsonReq (const $ CL.foldMap id)
-  deps <- either throwM return $ Y.decodeEither' bs :: IO [Deprecation]
+  edeprecated <- getResponseBody <$> httpJSONEither deprecatedJsonReq
+  deprecated <- either throwM return edeprecated :: IO [Deprecation]
   forM_
     repos
     (\(repo, filename) -> do
        let writeAs ext
              | ext `elem` [".yaml", ".yml"] -- save as YAML
-              = repoFileWriter repo filename (`Y.encodeFile` deps)
-             | ext == ".json" -- save as JSON
-              = repoFileWriter repo filename (`L.writeFile` A.encode deps)
-             | otherwise -- save the raw downloaded bytestring
-              = repoFileWriter repo filename (`S.writeFile` bs)
+              = repoWriteFile_ repo filename . L.fromStrict $ Y.encode deprecated
+             | otherwise -- save as JSON
+              = repoWriteFile_ repo filename (A.encode deprecated)
        writeAs (toLower $ takeExtension filename))
+
 
 -- | Saves '.cabal' files together with 'preferred-version', but ignores
 -- 'package.json'
 entryUpdateFile
   :: MonadIO m => GitRepository -> IndexFileEntry -> m ()
 entryUpdateFile allCabalRepo (CabalFileEntry IndexFile {..}) = do
-  liftIO $ repoFileWriter allCabalRepo ifPath (`L.writeFile` ifRaw)
+  liftIO $ repoWriteFile_ allCabalRepo ifPath ifRaw
 entryUpdateFile allCabalRepo (PreferredVersionsEntry IndexFile {..}) = do
-  liftIO $ repoFileWriter allCabalRepo ifPath (`L.writeFile` ifRaw)
+  liftIO $ repoWriteFile_ allCabalRepo ifPath ifRaw
 entryUpdateFile _ _ = return ()
+
+
+keepNewestEntryMap
+  :: Map FilePath Tar.Entry -> Tar.Entry -> Map FilePath Tar.Entry
+keepNewestEntryMap entriesMap entry@(Tar.entryContent -> Tar.NormalFile {}) =
+  Map.insert (Tar.entryPath entry) entry entriesMap
+keepNewestEntryMap entriesMap _ = entriesMap
+
 
 -- | Main `Sink` that uses entries from the 00-index.tar.gz file to update all
 -- relevant files in all three repos.
@@ -62,11 +70,12 @@ allCabalUpdate Repositories {..} = do
       [ (allCabalHashes, "deprecated.json")
       , (allCabalMetadata, "deprecated.yaml")
       ]
+  newestFileEntriesMap <- CL.fold keepNewestEntryMap Map.empty
   packageVersions <-
-    indexFileEntryConduit =$=
+    CL.sourceList (Map.elems newestFileEntriesMap) =$= indexFileEntryConduit =$=
     (getZipSink
        (ZipSink (CL.mapM_ (entryUpdateFile allCabalFiles)) *>
         ZipSink (CL.mapM_ (entryUpdateFile allCabalHashes)) *>
         ZipSink (CL.mapM_ (entryUpdateHashes allCabalHashes)) *>
         ZipSink sinkPackageVersions))
-  liftIO $ updateMetadata allCabalMetadata allCabalFiles packageVersions
+  liftIO $ updateMetadata allCabalMetadata newestFileEntriesMap packageVersions
