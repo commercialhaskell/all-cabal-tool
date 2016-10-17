@@ -32,7 +32,7 @@ import Data.Conduit.Process
         Inherited(Inherited))
 import ClassyPrelude.Conduit (sourceLazy, sinkLazyBuilder)
 import Data.Git
-import Data.Git.Ref (fromHex)
+--import Data.Git.Ref (fromHex)
 import Data.Git.Repository
 import Data.Git.Storage.Object
 import Data.Git.Storage.Loose
