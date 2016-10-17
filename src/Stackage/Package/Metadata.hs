@@ -124,19 +124,19 @@ updatePackageIfChanged _ (IndexFile {ifParsed = ParseFailed pe
 updatePackageIfChanged metadataRepo (IndexFile {ifParsed = ParseOk _ gpd
                                                ,..}, versionSet) =
   liftIO $
-  do epi <- (Y.decodeEither . L.toStrict) <$> repoReadFile' metadataRepo fp
-     when (Just pkgVersion /= ifPackageVersion) $
+  do when (Just pkgVersion /= ifPackageVersion) $
        error $
        "Internal error, metadata package update version mismatch: " ++
        show (ifPackageName, ifPackageVersion, pkgVersion)
      when (package pd /= PackageIdentifier ifPackageName pkgVersion) $
        error $
        show ("mismatch" :: String, ifPackageName, ifPackageVersion, package pd)
-     case epi of
-       Right pi
+     mepi <- fmap (Y.decodeEither . L.toStrict) <$> repoReadFile metadataRepo fp       
+     case mepi of
+       Just (Right pi)
        -- Cabal file is the same and version preference list hasn't changed.
          | cabalHash == piHash pi && versionSet == piAllVersions pi -> return ()
-       Right pi
+       Just (Right pi)
        -- Current version hasn't changed, hence data in the sdist.tar.gz is stil
        -- the same, updating cabal related info only.
          | pkgVersion == piLatest pi -> do
