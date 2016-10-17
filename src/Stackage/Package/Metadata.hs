@@ -78,7 +78,7 @@ sinkPackageVersions = CL.fold trackVersions Map.empty
 -- produced by `sinkPackageVersions` and cabal files from the second repo.
 updateMetadata
   :: (MonadIO m)
-  => GitRepository -- ^ Matadata repository
+  => Repository -- ^ Matadata repository
   -> (Map.Map FilePath Tar.Entry) -- ^ Map with cabal files taht can be retrieved
      -- from git index.
   -> Map PackageName (Set Version, Maybe VersionRange) -- ^ Packages version
@@ -117,7 +117,7 @@ updateMetadata metadataRepo fileEntriesMap pkgVersions =
 
 updatePackageIfChanged
   :: MonadIO m
-  => GitRepository -> (CabalFile, Set Version) -> m ()
+  => Repository -> (CabalFile, Set Version) -> m ()
 updatePackageIfChanged _ (IndexFile {ifParsed = ParseFailed pe
                                     ,..}, _) =
   error $ show (ifPackageName, ifPackageVersion, pe)
@@ -140,7 +140,7 @@ updatePackageIfChanged metadataRepo (IndexFile {ifParsed = ParseOk _ gpd
        -- Current version hasn't changed, hence data in the sdist.tar.gz is stil
        -- the same, updating cabal related info only.
          | pkgVersion == piLatest pi -> do
-           repoWriteFile_
+           repoWriteFile
              metadataRepo
              fp
              (L.fromStrict . Y.encode $
@@ -185,7 +185,7 @@ updatePackageIfChanged metadataRepo (IndexFile {ifParsed = ParseOk _ gpd
             pkgNameStr ++ " to version: " ++ pkgVersionStr
           let checkCond = getCheckCond gpd
               getDeps' = getDeps checkCond
-          repoWriteFile_
+          repoWriteFile
             metadataRepo
             fp
             (L.fromStrict . Y.encode $

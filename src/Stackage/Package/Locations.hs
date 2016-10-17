@@ -1,35 +1,35 @@
 {-# LANGUAGE OverloadedStrings #-}
 {-# LANGUAGE RecordWildCards #-}
 
+
 module Stackage.Package.Locations
   ( hackageBaseUrl
   , hackageDeprecatedUrl
   , mirrorFPComplete
   , GitUser(..)
-  , GitRepository(..)
+  , GitInfo(..)
+  , GitInstance
+  , Repository(..)
+  , withRepository
   , Repositories(..)
-  , GitFile
-  , getGitFileName
-  , readGitFile
-  , ensureGitRepository
+  , withRepositories
+  , ensureRepository
   , repoReadFile
   , repoReadFile'
   , repoWriteFile
-  , repoWriteFile_
   , repoCommit
   , repoTag
-    -- * Helper functons, that run external processes
+   -- * Helper functons, that run external processes
   , run
   , runPipe
   ) where
-
---import System.FilePath (dropFileName, (</>))
---import System.Directory (createDirectoryIfMissing)
 import qualified Data.ByteString.Lazy as L
 import qualified Data.ByteString.Lazy.Char8 as L8
 import qualified Data.ByteString.Char8 as S8
-import Control.Monad (unless, void)
-import Data.Conduit.Process (withCheckedProcessCleanup, sourceProcessWithStreams, Inherited(Inherited))
+import Control.Monad (unless)
+import Data.Conduit.Process
+       (withCheckedProcessCleanup, sourceProcessWithStreams,
+        Inherited(Inherited))
 import ClassyPrelude.Conduit (sourceLazy, sinkLazyBuilder)
 import Data.Git
 import Data.Git.Repository
@@ -41,7 +41,7 @@ import Time.System (timeCurrent)
 import System.Directory
 import System.FilePath
 import System.Exit
-import System.Process -- (proc, showCommandForUser)
+import System.Process (proc, cwd, showCommandForUser)
 import qualified Data.ByteString.UTF8 as U8
 import qualified Filesystem.Path as P
 import qualified Filesystem.Path.Rules as P
@@ -67,177 +67,152 @@ data GitUser = GitUser
 
 
 
-data GitRepository = GitRepository
-  { repoAddress :: String
+data GitInfo = GitInfo
+  { gitAddress :: String
     -- ^ Git address of the repository were it can be cloned from using SSH key.
-  , repoBranch :: String
+  , gitBranchName :: String
     -- ^ Branch that updates should be committed to.
-  , repoUser :: GitUser
+  , gitUser :: GitUser
     -- ^ User information to be used for the commits.
-  , repoTagName :: Maybe String
+  , gitTagName :: Maybe String
     -- ^ Create a tag after an update.
-  , repoLocalPath :: FilePath
-    -- ^ Filepath to the root of the repository.
-  , repoWorkTree :: WorkTree
+  , gitLocalPath :: FilePath
+  }
+
+data GitInstance = GitInstance
+  { gitRepo :: Git
+    -- ^ Git repository instance.
+  , gitBranchRef :: Ref
+    -- ^ Reference of the commit, that current branch is pointing to.
+  , gitWorkTree :: WorkTree
     -- ^ Tree of all modifications to the repository.
   }
 
+
+data Repository = Repository
+  { repoInstance :: GitInstance
+  , repoInfo :: GitInfo
+  }
+
+
 data Repositories = Repositories
-  { allCabalFiles :: GitRepository
-  , allCabalHashes :: GitRepository
-  , allCabalMetadata :: GitRepository
+  { allCabalFiles :: Repository
+  , allCabalHashes :: Repository
+  , allCabalMetadata :: Repository
   }
 
 
-data GitFile = GitFile
-  { _gitRepoPath :: P.FilePath
-  , _gitFileRef :: Ref
-  , _gitFileName :: FilePath
-  }
-
-
--- | Get file name relative to it's git repository.
-getGitFileName :: GitFile -> FilePath
-getGitFileName = _gitFileName
-
-
-
--- | Read the file from repository by the reference.
-readGitFile :: GitFile -> IO L.ByteString
-readGitFile GitFile {..} =
-  withRepo _gitRepoPath $
-  \git -> do
-    mobj <- getObject git _gitFileRef True
-    let funcName = "Stackage.Package.Locations.readGitFile: "
-    case mobj of
-      Just (ObjBlob (Blob blob)) -> return blob
-      Just _ ->
-        error $ funcName ++ "Attempt to read a reference that is not a file"
-      _ -> error $ funcName ++ "Reference to the file does not exist."
-
+withRepositories
+  :: (GitInfo, GitInfo, GitInfo) -> (Repositories -> IO a) -> IO a
+withRepositories (filesInfo, hashesInfo, metadataInfo) action = do
+  withRepository
+    filesInfo
+    (\filesRepo ->
+        withRepository
+          hashesInfo
+          (\hashesRepo ->
+              withRepository
+                metadataInfo
+                (\metadataRepo -> do
+                   action $ Repositories filesRepo hashesRepo metadataRepo)))
 
 
 -- | Read a file from a repository. A tree that is pointed to by the
 -- `repoBranch` is used instead of HEAD.
-repoReadFile :: GitRepository -> FilePath -> IO (Maybe L.ByteString)
-repoReadFile repo@GitRepository {..} fp = do
-  withBranch repo $
-    \git branchRef -> do
-      mblobRef <- resolvePath git branchRef (toEntPath fp)
-      case mblobRef of
-        Nothing -> return Nothing
-        Just blobRef -> do
-          mobj <- getObject git blobRef True
-          case mobj of
-            Just (ObjBlob (Blob blob)) -> return $ Just blob
-            _ -> return Nothing
-
+repoReadFile :: Repository -> FilePath -> IO (Maybe L.ByteString)
+repoReadFile Repository {repoInstance = GitInstance {..}} fp = do
+  mblobRef <- resolvePath gitRepo gitBranchRef (toEntPath fp)
+  case mblobRef of
+    Nothing -> return Nothing
+    Just blobRef -> do
+      mobj <- getObject gitRepo blobRef True
+      case mobj of
+        Just (ObjBlob (Blob blob)) -> return $ Just blob
+        _ -> return Nothing
 
 -- | Same as `readRepoFile`, but will raise an error if file cannot be found.
-repoReadFile' :: GitRepository -> FilePath -> IO L.ByteString
-repoReadFile' repo@GitRepository {..} fp = do
+repoReadFile' :: Repository -> FilePath -> IO L.ByteString
+repoReadFile' repo@Repository {repoInfo = GitInfo {..}} fp = do
   mfile <- repoReadFile repo fp
   case mfile of
     Just file -> return file
     Nothing ->
       error $
       "Could not find file: " ++
-      fp ++ " in repository: " ++ repoLocalPath ++ " under branch: " ++ repoBranch
+      fp ++ " in repository: " ++ gitLocalPath ++ " under branch: " ++ gitBranchName
 
 
 -- | Writes a file into the repository as a loose object. Use `repoCommit` to
 -- finilize the changes. Returns `GitFile` that can be used to read the contents
 -- of the file back at any time with the help of `readGitFile`.
-repoWriteFile :: GitRepository -> FilePath -> L.ByteString -> IO GitFile
-repoWriteFile GitRepository{..} fp blob = do
-  let repoPath = getRepoPath repoLocalPath
-  withRepo repoPath $
-    \git -> do
-      newRef <- setObject git (ObjBlob (Blob blob))
-      workTreeSet git repoWorkTree (toEntPath fp) (EntFile, newRef)
-      return (GitFile repoPath newRef fp)
-
-
--- | Same as `repoWriteFile` except it discards the result.
-repoWriteFile_ :: GitRepository -> FilePath -> L.ByteString -> IO ()
-repoWriteFile_ repo fp = void . repoWriteFile repo fp
+repoWriteFile :: Repository -> FilePath -> L.ByteString -> IO ()
+repoWriteFile Repository {repoInstance = GitInstance {..}} fp blob = do
+  newRef <- setObject gitRepo (ObjBlob (Blob blob))
+  workTreeSet gitRepo gitWorkTree (toEntPath fp) (EntFile, newRef)
 
 
 -- | Flushes the work tree and creates a signed commit. Attached branch will
--- point to the commit after it is created. Returned is the repository with a
--- new work tree, unless there is nothing to commit, in which case it's a noop.
-repoCommit :: GitRepository -- ^ Repository
+-- point to the commit after it is created.
+repoCommit :: Repository -- ^ Repository
            -> S8.ByteString -- ^ Action that creates a commit message.
-           -> IO (Maybe GitRepository)
-repoCommit repo@GitRepository {..} commitMessage = do
-  withBranch repo $
-    \git branchRef -> do
-      oldRootRef <-
-        maybe
-          (error $
-           "Cannot resolve root for " ++ repoBranch ++ " for repo: " ++ repoLocalPath)
-          id <$>
-        resolvePath git branchRef []
-      newRootRef <- workTreeFlush git repoWorkTree
-      print $ "Branch ref: " ++ show branchRef
-      print $ "Old root ref: " ++ show oldRootRef
-      print $ "New root ref: " ++ show newRootRef
-      if oldRootRef == newRootRef
-        then do
-          putStrLn $ repoLocalPath ++ ": Nothing to commit"
-          return Nothing
-        else do
-          person <- getPerson repoUser
-          let commit =
-                Commit
-                { commitTreeish = newRootRef
-                , commitParents = [branchRef]
-                , commitAuthor = person
-                , commitCommitter = person
-                , commitEncoding = Nothing
-                , commitExtras = []
-                , commitMessage = commitMessage
-                }
-          signedCommit <- signCommit repo commit
-          putStrLn $ "Will commit: " ++ show signedCommit
-          commitRef <- setObject git (ObjCommit signedCommit)
-          putStrLn $ "Created commit: " ++ show commitRef
-          branchWrite git (RefName repoBranch) commitRef
-          -- reset the tree
-          workTree <- workTreeFrom newRootRef
-          return $
-            Just
-            repo
-            { repoWorkTree = workTree
+           -> IO ()
+repoCommit Repository {repoInstance = GitInstance {..}
+                      ,repoInfo = GitInfo {..}} commitMessage = do
+  oldRootTreeRef <-
+    maybe
+      (error $ "Cannot resolve root for " ++ gitBranchName ++ " for repo: " ++ gitLocalPath)
+      id <$>
+    resolvePath gitRepo gitBranchRef []
+  newRootTreeRef <- workTreeFlush gitRepo gitWorkTree
+  print $ "Branch ref: " ++ show gitBranchRef
+  print $ "Old root ref: " ++ show oldRootTreeRef
+  print $ "New root ref: " ++ show newRootTreeRef
+  if oldRootTreeRef == newRootTreeRef
+    then do
+      putStrLn $ gitLocalPath ++ ": Nothing to commit"
+    else do
+      person <- getPerson gitUser
+      let commit =
+            Commit
+            { commitTreeish = newRootTreeRef
+            , commitParents = [gitBranchRef]
+            , commitAuthor = person
+            , commitCommitter = person
+            , commitEncoding = Nothing
+            , commitExtras = []
+            , commitMessage = commitMessage
             }
+      signedCommit <- signCommit gitRepo (userGPG gitUser) commit
+      putStrLn $ "Will commit: " ++ show signedCommit
+      commitRef <- setObject gitRepo (ObjCommit signedCommit)
+      putStrLn $ "Created commit: " ++ show commitRef
+      branchWrite gitRepo (RefName gitBranchName) commitRef
 
 
 -- | Creates a signed tag of the commit, that a branch is pointing to.
-repoTag :: GitRepository -> S8.ByteString -> IO ()
-repoTag repo@GitRepository {repoTagName = Just tagStr, ..} tagMessage = do
-  withBranch repo $
-    \git branchRef -> do
-      person <- getPerson repoUser
-      let tag = Tag { tagRef = branchRef
-                    , tagObjectType = TypeCommit
-                    , tagBlob = S8.pack tagStr
-                    , tagName = person
-                    , tagS = tagMessage }
-      signedTag <- signTag repo tag
-      ref <- setObject git (ObjTag signedTag)
-      putStrLn $ "Created tag: " ++ show ref
-      tagWrite git (RefName tagStr) ref
-      putStrLn $ "Wrote tag: " ++ show ref
+repoTag :: Repository -> S8.ByteString -> IO ()
+repoTag Repository {repoInstance = GitInstance {..}
+                   ,repoInfo = GitInfo {gitTagName = Just tagStr
+                                       ,..}} tagMessage = do
+  person <- getPerson gitUser
+  let tag =
+        Tag
+        { tagRef = gitBranchRef
+        , tagObjectType = TypeCommit
+        , tagBlob = S8.pack tagStr
+        , tagName = person
+        , tagS = tagMessage
+        }
+  signedTag <- signTag gitRepo (userGPG gitUser) tag
+  ref <- setObject gitRepo (ObjTag signedTag)
+  putStrLn $ "Created tag: " ++ show ref
+  tagWrite gitRepo (RefName tagStr) ref
+  putStrLn $ "Wrote tag: " ++ show ref
 repoTag _ _ = return ()      
 
 ----------------------------------------
 -- Git manipulation helper functions. --
 ----------------------------------------
-
-
-getRepoPath :: FilePath -> P.FilePath
-getRepoPath repoLocalPath =
-  P.decodeString P.posix repoLocalPath P.</> ".git"
 
 
 toEntPath :: FilePath -> EntPath
@@ -255,21 +230,38 @@ getPerson GitUser {..} = do
     }
 
 
-withBranch :: GitRepository -> (Git -> Ref -> IO a) -> IO a
-withBranch GitRepository {..} action =
-  withRepo (getRepoPath repoLocalPath) $
+withRepository :: GitInfo -> (Repository -> IO a) -> IO a
+withRepository info@GitInfo {..} action =
+  withRepo (P.decodeString P.posix gitLocalPath P.</> ".git") $
   \git -> do
     branchRef <-
       maybe
-        (error $ "Cannot resolve " ++ repoBranch ++ " for repository: " ++ repoLocalPath)
+        (error $ "Cannot resolve " ++ gitBranchName ++ " for repository: " ++ gitLocalPath)
         id <$>
-      resolveRevision git (fromString repoBranch)
-    action git branchRef
+      resolveRevision git (fromString gitBranchName)
+    rootTreeRef <-
+      maybe
+        (error $
+         "Cannot resolve root tree for " ++
+         gitBranchName ++ " for repository: " ++ gitLocalPath)
+        id <$>
+      resolvePath git branchRef []
+    workTree <- workTreeFrom rootTreeRef
+    action
+      Repository
+      { repoInstance =
+        GitInstance
+        { gitRepo = git
+        , gitBranchRef = branchRef
+        , gitWorkTree = workTree
+        }
+      , repoInfo = info
+      }
+    
 
-
-signCommit :: GitRepository -> Commit -> IO Commit
-signCommit repo commit = do
-  signature <- signObject repo (ObjCommit commit)
+signCommit :: Git -> String -> Commit -> IO Commit
+signCommit gitRepo key commit = do
+  signature <- signObject gitRepo key (ObjCommit commit)
   -- Workaround for: https://github.com/vincenthz/hit/issues/35
   -- Otherwise should be:
   -- let signatureKey = "gpgsig"
@@ -282,21 +274,19 @@ signCommit repo commit = do
     }
 
 
-signTag :: GitRepository -> Tag -> IO Tag
-signTag repo tag = do
-  signature <- signObject repo (ObjTag tag)
+signTag :: Git -> String -> Tag -> IO Tag
+signTag gitRepo key tag = do
+  signature <- signObject gitRepo key (ObjTag tag)
   return
     tag
     { tagS = S8.intercalate "\n" [tagS tag, L.toStrict signature]
     }
 
 
-signObject :: GitRepository -> Object -> IO L.ByteString
-signObject GitRepository {..} obj = do
-  gpgProgram <-
-    withRepo (getRepoPath repoLocalPath) $
-    \git -> maybe "gpg" id <$> configGet git "gpg" "program"
-  let args = ["-bsau", userGPG repoUser]
+signObject :: Git -> String -> Object -> IO L.ByteString
+signObject gitRepo key obj = do
+  gpgProgram <- maybe "gpg" id <$> configGet gitRepo "gpg" "program"
+  let args = ["-bsau", key]
   let payload = L.tail $ L.dropWhile (/= 0) $ looseMarshall obj
   (signature, err) <- runPipe "." gpgProgram args payload
   unless (L.null err) $ putStrLn $ "Warning: " ++ L8.unpack err
@@ -307,7 +297,7 @@ signObject GitRepository {..} obj = do
 
 -- | Clones the repo if it doesn't exists locally yet, otherwise fetches and
 -- creates a local branch.
-ensureGitRepository
+ensureRepository
   :: String -- ^ Git provider ex. "github.com"
   -> String -- ^ Repository account ex. "commercialhaskell"
   -> GitUser -- ^ User information to be used for the commits.
@@ -315,18 +305,18 @@ ensureGitRepository
   -> String -- ^ Repository branch ex. "master"
   -> FilePath -- ^ Location in the file system where
      -- repository should be cloned to.
-  -> IO GitRepository
-ensureGitRepository repoHost repoAccount gitUser repoName repoBranch repoBasePath = do
+  -> IO GitInfo
+ensureRepository repoHost repoAccount gitUser repoName repoBranchName repoBasePath = do
   exists <- doesDirectoryExist repoLocalPath
   if exists
     then do
       run repoLocalPath "git" ["remote", "set-url", "origin", repoAddress]
       run repoLocalPath "git" ["fetch"]
-      run repoLocalPath "git" ["branch", "-D", repoBranch]
+      run repoLocalPath "git" ["branch", "-D", repoBranchName]
       run
         repoLocalPath
         "git"
-        ["checkout", "-B", repoBranch, "origin/" ++ repoBranch]
+        ["checkout", "-B", repoBranchName, "origin/" ++ repoBranchName]
     else run
            "."
            "git"
@@ -335,35 +325,21 @@ ensureGitRepository repoHost repoAccount gitUser repoName repoBranch repoBasePat
            , repoAddress
            , repoLocalPath
            , "--branch"
-           , repoBranch
+           , repoBranchName
            ]
   run repoLocalPath "git" ["config", "user.name", userName gitUser]
   run repoLocalPath "git" ["config", "user.email", userEmail gitUser]
   run repoLocalPath "git" ["config", "core.autocrlf", "input"]
   -- initialize the work tree
-  withBranch repo $
-    \git branchRef -> do
-      rootTreeRef <-
-        maybe
-          (error $
-           "Cannot resolve root for " ++ repoBranch ++ " for repo: " ++ repoLocalPath)
-          id <$>
-        resolvePath git branchRef []
-      workTree <- workTreeFrom rootTreeRef
-      return
-        repo
-        { repoWorkTree = workTree
-        }
+  return
+    GitInfo
+    { gitAddress = repoAddress
+    , gitBranchName = repoBranchName
+    , gitUser = gitUser
+    , gitTagName = Nothing
+    , gitLocalPath = repoLocalPath
+    }
   where
-    repo =
-      GitRepository
-      { repoAddress = repoAddress
-      , repoBranch = repoBranch
-      , repoUser = gitUser
-      , repoTagName = Nothing
-      , repoLocalPath = repoLocalPath
-      , repoWorkTree = error "Work Tree has not been initialized yet."
-      }
     repoLocalPath = repoBasePath </> repoName
     repoAddress =
       concat ["git@", repoHost, ":", repoAccount, "/", repoName, ".git"]
