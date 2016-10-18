@@ -1,0 +1,37 @@
+sudo: false
+language: c
+
+deploy:
+  provider: s3
+  access_key_id: AKIAIAVQAXMLLEPM4I5A
+  secret_access_key:
+    secure: "z3Ap1BSpH7EC318aHfn/+wvwwve/DdAg6N2ry1VbhC0QmnPHTtMUA2atQpUxMM+zFGlkovZXT4UtQ+DFiFtBLvaHTcRKSW4hGu3o5A+64aP1rzZZKoo6jJqdB/170Co+0i7oLZyI5l3X5whG+zVRQ1u0+OhDzyARujUUVlAxKa7Mc0FAmN2aGaOZ/bYpJvbqHeeZkrJN2/7QWknCE02hTCdR66YwB++3fyLOjfj7RRtGGrts+PGCmKjl2bHpkrb2DN9pKSiMWtG/s14QfXNjTZ2Z0vb1sSkGxxIXWZOUaPdHJQH9ZinG9ev6TsAtZ78Dul7GvOFtLYGvfcnDCIiEIGrGDtXsLrxCIIhWB0Qt+cyDiVeKs4H1tbhM5jQ5eYGgEoUeTPGMO8LFXO3WoVdRL7yzA3wOw8PDOCLbjjSYhrLcFoZ+kz/KPRWgFci6oT9uhrcc9/aodGla6IqTBCzUKxqipjd46c6edc/TLCtfB37Ds4CEHuZ3vo2e6MFXTVGKn4QyRQJX+w3iTvZepo+2ufOLIPGAkOSV2cBFJq4ewNlM5BLddpWRCc3tav+eUEBnW+3znuZNZHgXq6OpXCiIApCuIFvJiprmXSLNlJIJlv8+K7LHqL58F+fM4mC4lJ7FA/0IHi5ORE6bP4BhR2H8UdZulR4qvNV0za8LLm2VaHc="
+  bucket: stackage-travis
+  acl: public_read
+  skip_cleanup: true
+  local_dir: to-travis
+  upload-dir: all-cabal-tool
+  on:
+    repo: commercialhaskell/all-cabal-tool
+    branch: master
+
+addons:
+  apt:
+    packages:
+    - libgmp-dev
+
+before_install:
+# stack
+- mkdir -p ~/.local/bin
+- export PATH=$HOME/.local/bin:$PATH
+- travis_retry curl -L https://www.stackage.org/stack/linux-x86_64 | tar xz --wildcards --strip-components=1 -C ~/.local/bin '*/stack'
+- stack --no-terminal setup
+
+script:
+- mkdir -p to-travis
+- stack --no-terminal test --copy-bins --local-bin-path to-travis
+- bzip2 to-travis/all-cabal-tool
+
+cache:
+  directories:
+  - $HOME/.stack
