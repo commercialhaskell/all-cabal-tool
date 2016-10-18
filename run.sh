@@ -7,15 +7,14 @@ tar zxfv /secret/home.tar.gz
 ssh-keyscan -H github.com >> $HOME/.ssh/known_hosts
 
 source /secret-mirror/config.sh
-export AWS_ACCESS_KEY_ID
-export AWS_SECRET_ACCESS_KEY
-export S3_BUCKET
 
-git clone git@github.com:commercialhaskell/all-cabal-files --branch hackage --depth=1
-git clone git@github.com:commercialhaskell/all-cabal-hashes --branch hackage --depth=1
-git clone git@github.com:commercialhaskell/all-cabal-metadata --depth=1
+#git config --global user.email michael+all-cabal-tool@snoyman.com
+#git config --global user.name all-cabal-tool
 
-git config --global user.email michael+all-cabal-tool@snoyman.com
-git config --global user.name all-cabal-tool
-
-/usr/local/bin/hackage-watcher http://hackage.fpcomplete.com/01-index.tar.gz /usr/local/bin/run-inner.sh
+exec /usr/local/bin/all-cabal-tool \
+    --username all-cabal-tool \
+    --email michael+all-cabal-tool@snoyman.com \
+    --gpg-sign D6CF0FD \
+    --s3-bucket $S3_BUCKET \
+    --aws-access-key $AWS_ACCESS_KEY_ID \
+    --aws-secret-key $AWS_SECRET_ACCESS_KEY
