@@ -210,7 +210,7 @@ main = do
                commitMessage <- getCommitMessage
                (updated, mnewEtag) <-
                  (processIndexUpdate repos indexReq mlastEtag)
-               when (updated && False) $
+               when updated $
                  do pushRepos repos commitMessage
                     case ms3Bucket of
                       Just s3Bucket ->
