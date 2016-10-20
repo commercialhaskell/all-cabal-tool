@@ -48,6 +48,8 @@ import Text.PrettyPrint (render)
 import qualified Network.HTTP.Client as H
 import qualified Network.HTTP.Client.TLS as H
 
+import Stackage.Package.Locations
+
 -- | Download a tarball from a webserver, decompress, parse it and handle it
 -- using a provided `Sink`. Using a conditional function it is possible to
 -- prevent a tarball from being downloaded, for instance in such a case when an
@@ -89,8 +91,34 @@ data IndexFile p = IndexFile
   , ifFileName :: !FilePath
   , ifPath :: !FilePath
   , ifRaw :: L.ByteString
+  , ifGitFile :: GitFile
   , ifParsed :: p
   }
+
+
+
+
+makeIndexFile
+  :: (MonadBase base m, PrimMonad base, MonadThrow m)
+  => PackageName
+  -> Maybe Version
+  -> FilePath
+  -> FilePath
+  -> L.ByteString
+  -> p
+  -> m (IndexFile p)
+makeIndexFile packageName mpackageVersion fileName filePath raw p = do
+  gitFile <- getGitFile filePath raw
+  return $
+    IndexFile
+    { ifPackageName = packageName
+    , ifPackageVersion = mpackageVersion
+    , ifFileName = fileName
+    , ifPath = filePath
+    , ifRaw = raw
+    , ifGitFile = gitFile
+    , ifParsed = p
+    }
 
 data HackageHashes = HackageHashes
   { hHashes :: Map Text Text
@@ -136,40 +164,31 @@ getCabalFilePath :: PackageName -> Version -> FilePath
 getCabalFilePath (renderDistText -> pkgName) (renderDistText -> pkgVersion) =
   pkgName </> pkgVersion </> pkgName <.> "cabal"
 
-getCabalFile :: PackageName -> Version -> L.ByteString -> CabalFile
+--getCabalFile
+--  :: (MonadBase base m, PrimMonad base, MonadThrow m)
+--  => PackageName -> Version -> L.ByteString -> m CabalFile
 getCabalFile pkgName pkgVersion lbs =
-  IndexFile
-  { ifPackageName = pkgName
-  , ifPackageVersion = Just pkgVersion
-  , ifFileName = renderDistText pkgName <.> "cabal"
-  , ifPath = getCabalFilePath pkgName pkgVersion
-  , ifRaw = lbs
-  , ifParsed =
-    parsePackageDescription $
-    unpack $ dropBOM $ decodeUtf8With lenientDecode lbs
-  }
+  makeIndexFile
+    pkgName
+    (Just pkgVersion)
+    (renderDistText pkgName <.> "cabal")
+    (getCabalFilePath pkgName pkgVersion)
+    lbs
+    (parsePackageDescription $ unpack $ dropBOM $ decodeUtf8With lenientDecode lbs)
 -- https://github.com/haskell/hackage-server/issues/351
   where
     dropBOM t = fromMaybe t $ TL.stripPrefix (pack "\xFEFF") t
 
 indexFileEntryConduit
-  :: Monad m
+  :: (MonadBase base m, PrimMonad base, MonadThrow m)
   => Conduit Tar.Entry m IndexFileEntry
-indexFileEntryConduit = CL.mapMaybe getIndexFileEntry
+indexFileEntryConduit = CL.mapMaybeM getIndexFileEntry
   where
-    getIndexFileEntry e@(Tar.entryContent -> Tar.NormalFile lbs _) =
+    getIndexFileEntry e@(Tar.entryContent -> Tar.NormalFile lbs _) = do
       case (toPkgVer $ Tar.entryPath e) of
         Just (pkgName, Nothing, fileName@"preferred-versions") ->
-          Just $
-          PreferredVersionsEntry $
-          IndexFile
-          { ifPackageName = pkgName
-          , ifPackageVersion = Nothing
-          , ifFileName = fileName
-          , ifPath = Tar.entryPath e
-          , ifRaw = lbs
-          , ifParsed = pkgVersionRange
-          }
+          (Just . PreferredVersionsEntry) <$>
+          makeIndexFile pkgName Nothing fileName (Tar.entryPath e) lbs pkgVersionRange
           where (pkgNameStr, range) = break (== ' ') $ L8.unpack lbs
                 pkgVersionRange = do
                   pkgVersionRange' <- parseDistText range
@@ -177,32 +196,22 @@ indexFileEntryConduit = CL.mapMaybe getIndexFileEntry
                   guard (pkgName == pkgName')
                   Just pkgVersionRange'
         Just (pkgName, Just pkgVersion, fileName@"package.json") ->
-          Just $
-          HashesFileEntry $
-          IndexFile
-          { ifPackageName = pkgName
-          , ifPackageVersion = Just pkgVersion
-          , ifFileName = fileName
-          , ifPath = Tar.entryPath e
-          , ifRaw = lbs
-          , ifParsed = decodeHackageHashes pkgName pkgVersion lbs
-          }
+          (Just . HashesFileEntry) <$>
+          makeIndexFile
+            pkgName
+            (Just pkgVersion)
+            fileName
+            (Tar.entryPath e)
+            lbs
+            (decodeHackageHashes pkgName pkgVersion lbs)
         Just (pkgName, Just pkgVersion, _)
           | getCabalFilePath pkgName pkgVersion == Tar.entryPath e ->
-            Just $ CabalFileEntry $ getCabalFile pkgName pkgVersion lbs
+            (Just . CabalFileEntry) <$> getCabalFile pkgName pkgVersion lbs
         Just (pkgName, mpkgVersion, fileName) ->
-          Just $
-          UnrecognizedEntry $
-          IndexFile
-          { ifPackageName = pkgName
-          , ifPackageVersion = mpkgVersion
-          , ifFileName = fileName
-          , ifPath = Tar.entryPath e
-          , ifRaw = lbs
-          , ifParsed = ()
-          }
-        _ -> Nothing
-    getIndexFileEntry _ = Nothing
+          (Just . UnrecognizedEntry) <$>
+          makeIndexFile pkgName mpkgVersion fileName (Tar.entryPath e) lbs ()
+        _ -> return Nothing
+    getIndexFileEntry _ = return Nothing
     toPkgVer s0 = do
       (pkgName', '/':s1) <- Just $ break (== '/') s0
       pkgName <- parseDistText pkgName'

@@ -17,10 +17,13 @@ library
   exposed-modules:     Stackage.Package.Hashes
                      , Stackage.Package.IndexConduit
                      , Stackage.Package.Locations
+                     , Stackage.Package.Git
+                     , Stackage.Package.Git.WorkTree
                      , Stackage.Package.Metadata
                      , Stackage.Package.Metadata.Types
                      , Stackage.Package.Update
   build-depends:       base
+                     , byteable
                      , bytestring
                      , aeson
                      , Cabal
@@ -49,6 +52,7 @@ library
                      , text
                      , utf8-string
                      , yaml
+                     , zlib
   default-language:    Haskell2010
   ghc-options:         -Wall
 

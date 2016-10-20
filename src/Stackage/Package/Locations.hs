@@ -1,6 +1,7 @@
 {-# LANGUAGE OverloadedStrings #-}
 {-# LANGUAGE RecordWildCards #-}
-
+{-# LANGUAGE NoImplicitPrelude #-}
+{-# LANGUAGE ScopedTypeVariables #-}
 
 module Stackage.Package.Locations
   ( hackageBaseUrl
@@ -9,6 +10,8 @@ module Stackage.Package.Locations
   , GitUser(..)
   , GitInfo(..)
   , GitInstance
+  , GitFile(..)
+  , getGitFile
   , Repository(..)
   , withRepository
   , Repositories(..)
@@ -17,12 +20,14 @@ module Stackage.Package.Locations
   , repoReadFile
   , repoReadFile'
   , repoWriteFile
+  , repoWriteGitFile
   , repoCommit
   , repoTag
    -- * Helper functons, that run external processes
   , run
   , runPipe
   ) where
+import ClassyPrelude.Conduit
 import qualified Data.ByteString.Lazy as L
 import qualified Data.ByteString.Lazy.Char8 as L8
 import qualified Data.ByteString.Char8 as S8
@@ -30,13 +35,18 @@ import Control.Monad (unless)
 import Data.Conduit.Process
        (withCheckedProcessCleanup, sourceProcessWithStreams,
         Inherited(Inherited))
+import Data.Conduit.Zlib
+import Crypto.Hash (SHA1(..), Digest)
+import Crypto.Hash.Conduit (sinkHash)
 import ClassyPrelude.Conduit (sourceLazy, sinkLazyBuilder)
 import Data.Git
---import Data.Git.Ref (fromHex)
+       hiding (WorkTree, EntType(..), workTreeNew, workTreeFrom,
+               workTreeDelete, workTreeSet, workTreeFlush)
+import Data.Git.Ref hiding (hash)
 import Data.Git.Repository
+import Data.Git.Storage
 import Data.Git.Storage.Object
 import Data.Git.Storage.Loose
-import Data.String
 import Data.Hourglass (timeFromElapsed)
 import Time.System (timeCurrent)
 import System.Directory
@@ -45,8 +55,9 @@ import System.Exit
 import System.Process (proc, cwd, showCommandForUser)
 import qualified Data.ByteString.UTF8 as U8
 import qualified Filesystem.Path as P
-import qualified Filesystem.Path.Rules as P
+import qualified Filesystem.Path.CurrentOS as P
 
+import Stackage.Package.Locations.WorkTree
 
 hackageBaseUrl :: String
 hackageBaseUrl = "https://hackage.haskell.org"
@@ -103,6 +114,40 @@ data Repositories = Repositories
   }
 
 
+data GitFile = GitFile
+  { _fileRef :: Ref
+  , _filePath :: FilePath
+  , _fileContent :: L.ByteString
+  , _fileBlobRaw :: ByteString
+  , _fileBlobPath :: FilePath
+  }
+
+instance Eq GitFile where
+  f1 == f2 = _fileRef f1 == _fileRef f2 && _filePath f1 == _filePath f2
+
+
+getGitFile
+  :: (MonadBase base m, PrimMonad base, MonadThrow m)
+  => FilePath -> L8.ByteString -> m GitFile
+getGitFile fp lbs = do
+  let content = looseMarshall (ObjBlob (Blob lbs))
+  (compressed, sha1 :: Digest SHA1) <-
+    runConduit $
+    (sourceLazy content) =$=
+    getZipSink
+      ((,) <$> ZipSink (compress 1 defaultWindowBits =$= foldC) <*> ZipSink sinkHash)
+  let ref = fromHexString $ show sha1
+      (prefix, suffix) = toFilePathParts ref
+  return $
+    GitFile
+    { _fileRef = ref
+    , _filePath = fp
+    , _fileContent = lbs
+    , _fileBlobRaw = compressed
+    , _fileBlobPath = "objects" </> prefix </> suffix
+    }
+    
+
 withRepositories
   :: (GitInfo, GitInfo, GitInfo) -> (Repositories -> IO a) -> IO a
 withRepositories (filesInfo, hashesInfo, metadataInfo) action = do
@@ -147,16 +192,24 @@ repoReadFile' repo@Repository {repoInfo = GitInfo {..}} fp = do
 -- finilize the changes. Returns `GitFile` that can be used to read the contents
 -- of the file back at any time with the help of `readGitFile`.
 repoWriteFile :: Repository -> FilePath -> L.ByteString -> IO ()
-repoWriteFile Repository {repoInstance = GitInstance {..}
-                         ,repoInfo = GitInfo {..}} fp blob = do
-  newRef <- setObject gitRepo (ObjBlob (Blob blob))
-  {-(newRef, _) <-
-    runPipe
-      gitLocalPath
-      "git"
-      ["hash-object", "-w", "-t", "blob", "--path=" ++ fp, "--stdin"]
-      blob -}
-  workTreeSet gitRepo gitWorkTree (toEntPath fp) (EntFile, newRef)
+repoWriteFile repo fp raw = do
+  gitFile <- getGitFile fp raw
+  repoWriteGitFile repo gitFile
+
+
+repoWriteGitFile :: Repository -> GitFile -> IO ()
+repoWriteGitFile Repository {repoInstance = GitInstance {..}
+                            ,repoInfo = GitInfo {..}} GitFile {..} = do
+  loc <- findReference gitRepo _fileRef
+  case loc of
+    NotFound -> do
+      let path = P.encodeString (gitRepoPath gitRepo) </> _fileBlobPath
+      exists <- doesFileExist path
+      unless exists $ do
+        createDirectoryIfMissing True (dropFileName path)
+        writeFile path _fileBlobRaw
+    _ -> return ()      
+  workTreeSet gitRepo gitWorkTree (toEntPath _filePath) (EntFile, _fileRef)
 
 
 -- | Flushes the work tree and creates a signed commit. Attached branch will
@@ -177,7 +230,7 @@ repoCommit Repository {repoInstance = GitInstance {..}
   print $ "New root ref: " ++ show newRootTreeRef
   if oldRootTreeRef == newRootTreeRef
     then do
-      putStrLn $ gitLocalPath ++ ": Nothing to commit"
+      putStrLn $ pack gitLocalPath ++ ": Nothing to commit"
     else do
       person <- getPerson gitUser
       let commit =
@@ -191,9 +244,9 @@ repoCommit Repository {repoInstance = GitInstance {..}
             , commitMessage = commitMessage
             }
       signedCommit <- signCommit gitRepo (userGPG gitUser) commit
-      putStrLn $ "Will commit: " ++ show signedCommit
+      putStrLn $ "Will commit: " ++ tshow signedCommit
       commitRef <- setObject gitRepo (ObjCommit signedCommit)
-      putStrLn $ "Created commit: " ++ show commitRef
+      putStrLn $ "Created commit: " ++ tshow commitRef
       branchWrite gitRepo (RefName gitBranchName) commitRef
 
 
@@ -213,9 +266,9 @@ repoTag Repository {repoInstance = GitInstance {..}
         }
   signedTag <- signTag gitRepo (userGPG gitUser) tag
   ref <- setObject gitRepo (ObjTag signedTag)
-  putStrLn $ "Created tag: " ++ show ref
+  putStrLn $ "Created tag: " ++ tshow ref
   tagWrite gitRepo (RefName tagStr) ref
-  putStrLn $ "Wrote tag: " ++ show ref
+  putStrLn $ "Wrote tag: " ++ tshow ref
 repoTag _ _ = return ()      
 
 ----------------------------------------
@@ -240,7 +293,7 @@ getPerson GitUser {..} = do
 
 withRepository :: GitInfo -> (Repository -> IO a) -> IO a
 withRepository info@GitInfo {..} action =
-  withRepo (P.decodeString P.posix gitLocalPath P.</> ".git") $
+  withRepo (P.decodeString gitLocalPath P.</> ".git") $
   \git -> do
     branchRef <-
       maybe
@@ -297,7 +350,7 @@ signObject gitRepo key obj = do
   let args = ["-bsau", key]
   let payload = L.tail $ L.dropWhile (/= 0) $ looseMarshall obj
   (signature, err) <- runPipe "." gpgProgram args payload
-  unless (L.null err) $ putStrLn $ "Warning: " ++ L8.unpack err
+  unless (L.null err) $ putStrLn $ "Warning: " ++ pack (L8.unpack err)
   return signature
 
 
@@ -320,7 +373,6 @@ ensureRepository repoHost repoAccount gitUser repoName repoBranchName repoBasePa
     then do
       run repoLocalPath "git" ["remote", "set-url", "origin", repoAddress]
       run repoLocalPath "git" ["fetch"]
-      run repoLocalPath "git" ["branch", "-D", repoBranchName]
       run
         repoLocalPath
         "git"

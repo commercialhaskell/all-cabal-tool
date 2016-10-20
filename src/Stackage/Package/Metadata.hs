@@ -56,21 +56,31 @@ import Stackage.Package.Locations
 -- such are provided.
 sinkPackageVersions
   :: Monad m
-  => Consumer IndexFileEntry m (Map PackageName (Set Version, Maybe VersionRange))
+  => Consumer IndexFileEntry m (Map PackageName (CabalFile, Set Version, Maybe VersionRange))
 sinkPackageVersions = CL.fold trackVersions Map.empty
   where
-    updateVersionSetMap (newSet, _) (oldSet, moldRange) =
-      (Set.union newSet oldSet, moldRange)
-    -- in case that new range is Nothing, previos range is cleared.
-    updateVersionRangeMap (_, mnewRange) (oldSet, _) = (oldSet, mnewRange)
+    updateVersionSetMap (newCabalFile, newSet, _) (oldCabalFile, oldSet, moldRange) =
+      (cabalFile, Set.union newSet oldSet, moldRange)
+      where
+        cabalFile =
+          if ifPackageVersion newCabalFile >= ifPackageVersion oldCabalFile
+            then newCabalFile
+            else oldCabalFile
+    -- in case that new range is Nothing, previous range is cleared.
+    updateVersionRangeMap (_, _, mnewRange) (cabalFile, oldSet, _) =
+      (cabalFile, oldSet, mnewRange)
     trackVersions versionsMap (PreferredVersionsEntry IndexFile {..}) =
-      Map.insertWith updateVersionRangeMap ifPackageName (Set.empty, ifParsed) versionsMap
-    trackVersions versionsMap (CabalFileEntry IndexFile {ifPackageVersion = Just pkgVersion
-                                                        ,..}) =
+      Map.insertWith
+        updateVersionRangeMap
+        ifPackageName
+        (error "ignored argument", Set.empty, ifParsed)
+        versionsMap
+    trackVersions versionsMap (CabalFileEntry cabalFile@(IndexFile {ifPackageVersion = Just pkgVersion
+                                                                   ,..})) =
       Map.insertWith
         updateVersionSetMap
         ifPackageName
-        (Set.singleton pkgVersion, Nothing)
+        (cabalFile, Set.singleton pkgVersion, Nothing)
         versionsMap
     trackVersions versionsMap _ = versionsMap
 
@@ -79,17 +89,15 @@ sinkPackageVersions = CL.fold trackVersions Map.empty
 updateMetadata
   :: (MonadIO m)
   => Repository -- ^ Matadata repository
-  -> (Map.Map FilePath Tar.Entry) -- ^ Map with cabal files taht can be retrieved
-     -- from git index.
-  -> Map PackageName (Set Version, Maybe VersionRange) -- ^ Packages version
+  -> Map PackageName (CabalFile, Set Version, Maybe VersionRange) -- ^ Packages version
      -- information
   -> m ()
-updateMetadata metadataRepo fileEntriesMap pkgVersions =
+updateMetadata metadataRepo pkgVersions =
   liftIO $
   do let fromVersions versionsMap
            | Map.null versionsMap = Nothing
            | otherwise = Just $ Map.deleteFindMin versionsMap
-     let readCabalFile (pkgName, (versionSet, mversionRange)) = do
+     let readCabalFile (pkgName, (cabalFile, versionSet, mversionRange)) = do
            let preferredVersionSet =
                  case mversionRange of
                    Nothing -> versionSet
@@ -101,17 +109,13 @@ updateMetadata metadataRepo fileEntriesMap pkgVersions =
                  if Set.null preferredVersionSet
                    then versionSet
                    else preferredVersionSet
-           let pkgVersion = Set.findMax preferredVersionSetNonEmpty
            when (Set.null preferredVersionSet) $
              putStrLn $
              "Info: Package preferred version set is empty: " ++
              renderDistText pkgName ++
              ". Using all available versions for metadata."
-           let Tar.NormalFile bls _ =
-                 Tar.entryContent
-                   (fileEntriesMap Map.! getCabalFilePath pkgName pkgVersion)
            return
-             (getCabalFile pkgName pkgVersion bls, preferredVersionSetNonEmpty)
+             (cabalFile, preferredVersionSetNonEmpty)
      CL.unfold fromVersions pkgVersions =$= CL.mapM readCabalFile $$
        CL.mapM_ (updatePackageIfChanged metadataRepo)
 

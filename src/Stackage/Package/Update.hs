@@ -11,7 +11,6 @@ import qualified Data.ByteString.Lazy as L
 import Control.Monad.IO.Class (MonadIO(liftIO))
 import Data.Aeson as A (encode)
 import qualified Data.Conduit.List as CL
-import qualified Data.Map.Strict as Map
 import Data.Yaml as Y (encode)
 import Network.HTTP.Simple (parseRequest, httpJSONEither, getResponseBody)
 
@@ -46,23 +45,16 @@ saveDeprecated repos = do
 entryUpdateFile
   :: MonadIO m => Repository -> IndexFileEntry -> m ()
 entryUpdateFile allCabalRepo (CabalFileEntry IndexFile {..}) = do
-  liftIO $ repoWriteFile allCabalRepo ifPath ifRaw
+  liftIO $ repoWriteGitFile allCabalRepo ifGitFile
 entryUpdateFile allCabalRepo (PreferredVersionsEntry IndexFile {..}) = do
-  liftIO $ repoWriteFile allCabalRepo ifPath ifRaw
+  liftIO $ repoWriteGitFile allCabalRepo ifGitFile
 entryUpdateFile _ _ = return ()
-
-
-keepNewestEntryMap
-  :: Map FilePath Tar.Entry -> Tar.Entry -> Map FilePath Tar.Entry
-keepNewestEntryMap entriesMap entry@(Tar.entryContent -> Tar.NormalFile {}) =
-  Map.insert (Tar.entryPath entry) entry entriesMap
-keepNewestEntryMap entriesMap _ = entriesMap
 
 
 -- | Main `Sink` that uses entries from the 00-index.tar.gz file to update all
 -- relevant files in all three repos.
 allCabalUpdate
-  :: (MonadIO m, MonadMask m)
+  :: (MonadIO m, MonadMask m, MonadBase base m, PrimMonad base)
   => Repositories -> Sink Tar.Entry m ()
 allCabalUpdate Repositories {..} = do
   liftIO $
@@ -70,12 +62,13 @@ allCabalUpdate Repositories {..} = do
       [ (allCabalHashes, "deprecated.json")
       , (allCabalMetadata, "deprecated.yaml")
       ]
-  newestFileEntriesMap <- CL.fold keepNewestEntryMap Map.empty
+  --indexFileEntryConduit =$=(CL.mapM_ (entryUpdateFile allCabalFiles))
   packageVersions <-
-    CL.sourceList (Map.elems newestFileEntriesMap) =$= indexFileEntryConduit =$=
+    indexFileEntryConduit =$=
     (getZipSink
-       (ZipSink (CL.mapM_ (entryUpdateFile allCabalFiles)) *>
-        ZipSink (CL.mapM_ (entryUpdateFile allCabalHashes)) *>
-        ZipSink (CL.mapM_ (entryUpdateHashes allCabalHashes)) *>
+       (ZipSink
+          (CL.mapM_ (entryUpdateFile allCabalFiles) =$=
+           CL.mapM_ (entryUpdateFile allCabalHashes) =$=
+           CL.mapM_ (entryUpdateHashes allCabalHashes)) *>
         ZipSink sinkPackageVersions))
-  liftIO $ updateMetadata allCabalMetadata newestFileEntriesMap packageVersions
+  liftIO $ updateMetadata allCabalMetadata packageVersions
