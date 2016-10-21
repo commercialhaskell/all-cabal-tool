@@ -1,63 +1,33 @@
 {-# LANGUAGE OverloadedStrings #-}
 {-# LANGUAGE RecordWildCards #-}
-{-# LANGUAGE NoImplicitPrelude #-}
-{-# LANGUAGE ScopedTypeVariables #-}
 
 module Stackage.Package.Locations
-  ( hackageBaseUrl
-  , hackageDeprecatedUrl
-  , mirrorFPComplete
-  , GitUser(..)
-  , GitInfo(..)
-  , GitInstance
-  , GitFile(..)
-  , getGitFile
-  , Repository(..)
-  , withRepository
-  , Repositories(..)
-  , withRepositories
-  , ensureRepository
-  , repoReadFile
-  , repoReadFile'
-  , repoWriteFile
-  , repoWriteGitFile
-  , repoCommit
-  , repoTag
-   -- * Helper functons, that run external processes
-  , run
-  , runPipe
-  ) where
-import ClassyPrelude.Conduit
-import qualified Data.ByteString.Lazy as L
-import qualified Data.ByteString.Lazy.Char8 as L8
-import qualified Data.ByteString.Char8 as S8
-import Control.Monad (unless)
-import Data.Conduit.Process
-       (withCheckedProcessCleanup, sourceProcessWithStreams,
-        Inherited(Inherited))
-import Data.Conduit.Zlib
-import Crypto.Hash (SHA1(..), Digest)
-import Crypto.Hash.Conduit (sinkHash)
-import ClassyPrelude.Conduit (sourceLazy, sinkLazyBuilder)
-import Data.Git
-       hiding (WorkTree, EntType(..), workTreeNew, workTreeFrom,
-               workTreeDelete, workTreeSet, workTreeFlush)
-import Data.Git.Ref hiding (hash)
-import Data.Git.Repository
-import Data.Git.Storage
-import Data.Git.Storage.Object
-import Data.Git.Storage.Loose
-import Data.Hourglass (timeFromElapsed)
-import Time.System (timeCurrent)
-import System.Directory
-import System.FilePath
-import System.Exit
-import System.Process (proc, cwd, showCommandForUser)
-import qualified Data.ByteString.UTF8 as U8
-import qualified Filesystem.Path as P
-import qualified Filesystem.Path.CurrentOS as P
+  -- ( hackageBaseUrl
+  -- , hackageDeprecatedUrl
+  -- , mirrorFPComplete
+  -- , GitUser(..)
+  -- , GitInfo(..)
+  -- , GitInstance
+  -- , GitFile(..)
+  -- , getGitFile
+  -- , Repository(..)
+  -- , withRepository
+  -- , Repositories(..)
+  -- , withRepositories
+  -- , ensureRepository
+  -- , repoReadFile
+  -- , repoReadFile'
+  -- , repoWriteFile
+  -- , repoWriteGitFile
+  -- , repoCommit
+  -- , repoTag
+  --  -- * Helper functons, that run external processes
+  -- , run
+  -- , runPipe
+  where
 
-import Stackage.Package.Locations.WorkTree
+
+import Stackage.Package.Git
 
 hackageBaseUrl :: String
 hackageBaseUrl = "https://hackage.haskell.org"
@@ -71,81 +41,20 @@ mirrorFPComplete :: String
 mirrorFPComplete = "https://s3.amazonaws.com/hackage.fpcomplete.com"
 
 
-data GitUser = GitUser
-  { userName :: String
-  , userEmail :: String
-  , userGPG :: String
-  } deriving (Show)
 
 
 
-data GitInfo = GitInfo
-  { gitAddress :: String
-    -- ^ Git address of the repository were it can be cloned from using SSH key.
-  , gitBranchName :: String
-    -- ^ Branch that updates should be committed to.
-  , gitUser :: GitUser
-    -- ^ User information to be used for the commits.
-  , gitTagName :: Maybe String
-    -- ^ Create a tag after an update.
-  , gitLocalPath :: FilePath
-  }
-
-data GitInstance = GitInstance
-  { gitRepo :: Git
-    -- ^ Git repository instance.
-  , gitBranchRef :: Ref
-    -- ^ Reference of the commit, that current branch is pointing to.
-  , gitWorkTree :: WorkTree
-    -- ^ Tree of all modifications to the repository.
-  }
-
-
-data Repository = Repository
-  { repoInstance :: GitInstance
-  , repoInfo :: GitInfo
-  }
 
 
 data Repositories = Repositories
-  { allCabalFiles :: Repository
-  , allCabalHashes :: Repository
-  , allCabalMetadata :: Repository
+  { allCabalFiles :: GitRepository
+  , allCabalHashes :: GitRepository
+  , allCabalMetadata :: GitRepository
   }
 
 
-data GitFile = GitFile
-  { _fileRef :: Ref
-  , _filePath :: FilePath
-  , _fileContent :: L.ByteString
-  , _fileBlobRaw :: ByteString
-  , _fileBlobPath :: FilePath
-  }
-
-instance Eq GitFile where
-  f1 == f2 = _fileRef f1 == _fileRef f2 && _filePath f1 == _filePath f2
 
 
-getGitFile
-  :: (MonadBase base m, PrimMonad base, MonadThrow m)
-  => FilePath -> L8.ByteString -> m GitFile
-getGitFile fp lbs = do
-  let content = looseMarshall (ObjBlob (Blob lbs))
-  (compressed, sha1 :: Digest SHA1) <-
-    runConduit $
-    (sourceLazy content) =$=
-    getZipSink
-      ((,) <$> ZipSink (compress 1 defaultWindowBits =$= foldC) <*> ZipSink sinkHash)
-  let ref = fromHexString $ show sha1
-      (prefix, suffix) = toFilePathParts ref
-  return $
-    GitFile
-    { _fileRef = ref
-    , _filePath = fp
-    , _fileContent = lbs
-    , _fileBlobRaw = compressed
-    , _fileBlobPath = "objects" </> prefix </> suffix
-    }
     
 
 withRepositories
@@ -162,7 +71,7 @@ withRepositories (filesInfo, hashesInfo, metadataInfo) action = do
                 (\metadataRepo -> do
                    action $ Repositories filesRepo hashesRepo metadataRepo)))
 
-
+{-
 -- | Read a file from a repository. A tree that is pointed to by the
 -- `repoBranch` is used instead of HEAD.
 repoReadFile :: Repository -> FilePath -> IO (Maybe L.ByteString)
@@ -195,8 +104,8 @@ repoWriteFile :: Repository -> FilePath -> L.ByteString -> IO ()
 repoWriteFile repo fp raw = do
   gitFile <- getGitFile fp raw
   repoWriteGitFile repo gitFile
-
-
+-}
+{-
 repoWriteGitFile :: Repository -> GitFile -> IO ()
 repoWriteGitFile Repository {repoInstance = GitInstance {..}
                             ,repoInfo = GitInfo {..}} GitFile {..} = do
@@ -291,33 +200,6 @@ getPerson GitUser {..} = do
     }
 
 
-withRepository :: GitInfo -> (Repository -> IO a) -> IO a
-withRepository info@GitInfo {..} action =
-  withRepo (P.decodeString gitLocalPath P.</> ".git") $
-  \git -> do
-    branchRef <-
-      maybe
-        (error $ "Cannot resolve " ++ gitBranchName ++ " for repository: " ++ gitLocalPath)
-        id <$>
-      resolveRevision git (fromString gitBranchName)
-    rootTreeRef <-
-      maybe
-        (error $
-         "Cannot resolve root tree for " ++
-         gitBranchName ++ " for repository: " ++ gitLocalPath)
-        id <$>
-      resolvePath git branchRef []
-    workTree <- workTreeFrom rootTreeRef
-    action
-      Repository
-      { repoInstance =
-        GitInstance
-        { gitRepo = git
-        , gitBranchRef = branchRef
-        , gitWorkTree = workTree
-        }
-      , repoInfo = info
-      }
     
 
 signCommit :: Git -> String -> Commit -> IO Commit
@@ -448,3 +330,4 @@ runPipe dir cmd args input = do
       error $
       "Stackage.Package.Location.runPipe: " ++
       showCommandForUser cmd args ++ " produced an error: " ++ show code
+-}

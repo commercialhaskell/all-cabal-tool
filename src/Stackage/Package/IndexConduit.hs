@@ -48,7 +48,7 @@ import Text.PrettyPrint (render)
 import qualified Network.HTTP.Client as H
 import qualified Network.HTTP.Client.TLS as H
 
-import Stackage.Package.Locations
+import Stackage.Package.Git
 
 -- | Download a tarball from a webserver, decompress, parse it and handle it
 -- using a provided `Sink`. Using a conditional function it is possible to
@@ -95,11 +95,36 @@ data IndexFile p = IndexFile
   , ifParsed :: p
   }
 
+{-
+data IndexFile f = IndexFile
+  { ifPackageName :: !PackageName
+  , ifFileName :: !FilePath
+  , ifPath :: !FilePath
+  , ifRaw :: L.ByteString
+  , ifFile :: f
+  }
 
+data Cabal = Cabal
+  { cabalVersion :: Version
+  , cabalGitFile :: GitFile
+  , cabalParsed :: ParseResult GenericPackageDescription
+  }
+
+data PackageHashes = PackageHashes
+  { packageHashes :: HackageHashes
+  , packageVersion :: Version
+  }
+
+data IndexEntry =
+  CabalEntry (IndexFile Cabal)
+  PackageEntry (IndexFile PackageHashes)
+  VersionsEntry (IndexFile VersionRange)
+  UnknownEntry (IndexFile ())
+-}
 
 
 makeIndexFile
-  :: (MonadBase base m, PrimMonad base, MonadThrow m)
+  :: (Monad m)
   => PackageName
   -> Maybe Version
   -> FilePath
@@ -108,7 +133,7 @@ makeIndexFile
   -> p
   -> m (IndexFile p)
 makeIndexFile packageName mpackageVersion fileName filePath raw p = do
-  gitFile <- getGitFile filePath raw
+  gitFile <- makeGitFileM filePath raw
   return $
     IndexFile
     { ifPackageName = packageName
@@ -164,9 +189,10 @@ getCabalFilePath :: PackageName -> Version -> FilePath
 getCabalFilePath (renderDistText -> pkgName) (renderDistText -> pkgVersion) =
   pkgName </> pkgVersion </> pkgName <.> "cabal"
 
---getCabalFile
---  :: (MonadBase base m, PrimMonad base, MonadThrow m)
---  => PackageName -> Version -> L.ByteString -> m CabalFile
+
+getCabalFile
+  :: (Monad m)
+  => PackageName -> Version -> L.ByteString -> m CabalFile
 getCabalFile pkgName pkgVersion lbs =
   makeIndexFile
     pkgName
@@ -180,7 +206,7 @@ getCabalFile pkgName pkgVersion lbs =
     dropBOM t = fromMaybe t $ TL.stripPrefix (pack "\xFEFF") t
 
 indexFileEntryConduit
-  :: (MonadBase base m, PrimMonad base, MonadThrow m)
+  :: (Monad m)
   => Conduit Tar.Entry m IndexFileEntry
 indexFileEntryConduit = CL.mapMaybeM getIndexFileEntry
   where

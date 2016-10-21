@@ -50,37 +50,28 @@ import System.FilePath (splitExtension, takeFileName, (<.>), (</>))
 import Stackage.Package.Hashes
 import Stackage.Package.Metadata.Types
 import Stackage.Package.IndexConduit
+import Stackage.Package.Git
 import Stackage.Package.Locations
 
 -- | Collects all available package versions along with preferred versions if
 -- such are provided.
 sinkPackageVersions
   :: Monad m
-  => Consumer IndexFileEntry m (Map PackageName (CabalFile, Set Version, Maybe VersionRange))
+  => Consumer IndexFileEntry m (Map PackageName (Set Version, Maybe VersionRange))
 sinkPackageVersions = CL.fold trackVersions Map.empty
   where
-    updateVersionSetMap (newCabalFile, newSet, _) (oldCabalFile, oldSet, moldRange) =
-      (cabalFile, Set.union newSet oldSet, moldRange)
-      where
-        cabalFile =
-          if ifPackageVersion newCabalFile >= ifPackageVersion oldCabalFile
-            then newCabalFile
-            else oldCabalFile
+    updateVersionSetMap (newSet, _) (oldSet, moldRange) =
+      (Set.union newSet oldSet, moldRange)
     -- in case that new range is Nothing, previous range is cleared.
-    updateVersionRangeMap (_, _, mnewRange) (cabalFile, oldSet, _) =
-      (cabalFile, oldSet, mnewRange)
+    updateVersionRangeMap (_, mnewRange) (oldSet, _) = (oldSet, mnewRange)
     trackVersions versionsMap (PreferredVersionsEntry IndexFile {..}) =
-      Map.insertWith
-        updateVersionRangeMap
-        ifPackageName
-        (error "ignored argument", Set.empty, ifParsed)
-        versionsMap
-    trackVersions versionsMap (CabalFileEntry cabalFile@(IndexFile {ifPackageVersion = Just pkgVersion
-                                                                   ,..})) =
+      Map.insertWith updateVersionRangeMap ifPackageName (Set.empty, ifParsed) versionsMap
+    trackVersions versionsMap (CabalFileEntry (IndexFile {ifPackageVersion = Just pkgVersion
+                                                         ,..})) =
       Map.insertWith
         updateVersionSetMap
         ifPackageName
-        (cabalFile, Set.singleton pkgVersion, Nothing)
+        (Set.singleton pkgVersion, Nothing)
         versionsMap
     trackVersions versionsMap _ = versionsMap
 
@@ -88,16 +79,17 @@ sinkPackageVersions = CL.fold trackVersions Map.empty
 -- produced by `sinkPackageVersions` and cabal files from the second repo.
 updateMetadata
   :: (MonadIO m)
-  => Repository -- ^ Matadata repository
-  -> Map PackageName (CabalFile, Set Version, Maybe VersionRange) -- ^ Packages version
+  => GitRepository -- ^ Matadata repository
+  -> GitRepository -- ^ Repository with cabal files
+  -> Map PackageName (Set Version, Maybe VersionRange) -- ^ Packages version
      -- information
   -> m ()
-updateMetadata metadataRepo pkgVersions =
+updateMetadata metadataRepo cabalFilesRepo pkgVersions =
   liftIO $
   do let fromVersions versionsMap
            | Map.null versionsMap = Nothing
            | otherwise = Just $ Map.deleteFindMin versionsMap
-     let readCabalFile (pkgName, (cabalFile, versionSet, mversionRange)) = do
+     let readCabalFile (pkgName, (versionSet, mversionRange)) = do
            let preferredVersionSet =
                  case mversionRange of
                    Nothing -> versionSet
@@ -109,11 +101,15 @@ updateMetadata metadataRepo pkgVersions =
                  if Set.null preferredVersionSet
                    then versionSet
                    else preferredVersionSet
+           let pkgVersion = Set.findMax preferredVersionSetNonEmpty
            when (Set.null preferredVersionSet) $
              putStrLn $
              "Info: Package preferred version set is empty: " ++
              renderDistText pkgName ++
              ". Using all available versions for metadata."
+           bls <-
+             repoReadFile' cabalFilesRepo (getCabalFilePath pkgName pkgVersion)
+           cabalFile <- getCabalFile pkgName pkgVersion bls
            return
              (cabalFile, preferredVersionSetNonEmpty)
      CL.unfold fromVersions pkgVersions =$= CL.mapM readCabalFile $$
@@ -121,7 +117,7 @@ updateMetadata metadataRepo pkgVersions =
 
 updatePackageIfChanged
   :: MonadIO m
-  => Repository -> (CabalFile, Set Version) -> m ()
+  => GitRepository -> (CabalFile, Set Version) -> m ()
 updatePackageIfChanged _ (IndexFile {ifParsed = ParseFailed pe
                                     ,..}, _) =
   error $ show (ifPackageName, ifPackageVersion, pe)
@@ -135,7 +131,7 @@ updatePackageIfChanged metadataRepo (IndexFile {ifParsed = ParseOk _ gpd
      when (package pd /= PackageIdentifier ifPackageName pkgVersion) $
        error $
        show ("mismatch" :: String, ifPackageName, ifPackageVersion, package pd)
-     mepi <- fmap (Y.decodeEither . L.toStrict) <$> repoReadFile metadataRepo fp       
+     mepi <- fmap (Y.decodeEither . L.toStrict) <$> repoReadFile metadataRepo fp
      case mepi of
        Just (Right pi)
        -- Cabal file is the same and version preference list hasn't changed.
@@ -144,22 +140,28 @@ updatePackageIfChanged metadataRepo (IndexFile {ifParsed = ParseOk _ gpd
        -- Current version hasn't changed, hence data in the sdist.tar.gz is stil
        -- the same, updating cabal related info only.
          | pkgVersion == piLatest pi -> do
-           repoWriteFile
-             metadataRepo
-             fp
-             (L.fromStrict . Y.encode $
-              pi
-              { piLatest = pkgVersion
-              , piHash = cabalHash
-              , piAllVersions = versionSet
-              , piSynopsis = pack $ synopsis pd
-              , piAuthor = pack $ author pd
-              , piMaintainer = pack $ maintainer pd
-              , piHomepage = pack $ homepage pd
-              , piLicenseName = pack $ renderDistText $ license pd
-              })
+           putStrLn $
+             "METADATA: Cabal file update for:  " ++
+             getCabalFilePath ifPackageName pkgVersion
+           repoWriteFile metadataRepo $
+             makeGitFile
+               fp
+               (L.fromStrict . Y.encode $
+                pi
+                { piLatest = pkgVersion
+                , piHash = cabalHash
+                , piAllVersions = versionSet
+                , piSynopsis = pack $ synopsis pd
+                , piAuthor = pack $ author pd
+                , piMaintainer = pack $ maintainer pd
+                , piHomepage = pack $ homepage pd
+                , piLicenseName = pack $ renderDistText $ license pd
+                })
        -- Version update or a totally new package.
-       _ -> updatePackage
+       _ -> do
+         putStrLn $
+           "METADATA: New package version: " ++ getCabalFilePath ifPackageName pkgVersion
+         updatePackage
   where
     pkgNameStr = renderDistText ifPackageName
     pkgVersionStr = renderDistText pkgVersion
@@ -189,32 +191,32 @@ updatePackageIfChanged metadataRepo (IndexFile {ifParsed = ParseOk _ gpd
             pkgNameStr ++ " to version: " ++ pkgVersionStr
           let checkCond = getCheckCond gpd
               getDeps' = getDeps checkCond
-          repoWriteFile
-            metadataRepo
-            fp
-            (L.fromStrict . Y.encode $
-             PackageInfo
-             { piLatest = pkgVersion
-             , piHash = cabalHash
-             , piAllVersions = versionSet
-             , piSynopsis = pack $ synopsis pd
-             , piDescription = desc
-             , piDescriptionType = desct
-             , piChangeLog = cl
-             , piChangeLogType = clt
-             , piBasicDeps =
-               combineDeps $
-               maybe id ((:) . getDeps') (condLibrary gpd) $
-               map (getDeps' . snd) (condExecutables gpd)
-             , piTestBenchDeps =
-               combineDeps $
-               map (getDeps' . snd) (condTestSuites gpd) ++
-               map (getDeps' . snd) (condBenchmarks gpd)
-             , piAuthor = pack $ author pd
-             , piMaintainer = pack $ maintainer pd
-             , piHomepage = pack $ homepage pd
-             , piLicenseName = pack $ renderDistText $ license pd
-             })
+          repoWriteFile metadataRepo $
+            makeGitFile
+              fp
+              (L.fromStrict . Y.encode $
+               PackageInfo
+               { piLatest = pkgVersion
+               , piHash = cabalHash
+               , piAllVersions = versionSet
+               , piSynopsis = pack $ synopsis pd
+               , piDescription = desc
+               , piDescriptionType = desct
+               , piChangeLog = cl
+               , piChangeLogType = clt
+               , piBasicDeps =
+                 combineDeps $
+                 maybe id ((:) . getDeps') (condLibrary gpd) $
+                 map (getDeps' . snd) (condExecutables gpd)
+               , piTestBenchDeps =
+                 combineDeps $
+                 map (getDeps' . snd) (condTestSuites gpd) ++
+                 map (getDeps' . snd) (condBenchmarks gpd)
+               , piAuthor = pack $ author pd
+               , piMaintainer = pack $ maintainer pd
+               , piHomepage = pack $ homepage pd
+               , piLicenseName = pack $ renderDistText $ license pd
+               })
     fp =
       "packages" </> (unpack $ toLower $ pack $ take 2 $ pkgNameStr ++ "XX") </>
       pkgNameStr <.>
