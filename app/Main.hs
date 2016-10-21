@@ -26,10 +26,11 @@ import Network.HTTP.Simple
         getResponseStatusCode, getResponseHeader)
 import Options.Applicative
 import System.Environment (getEnv, lookupEnv)
-import System.IO.Temp (withSystemTempDirectory)
+import System.IO (BufferMode(LineBuffering), hSetBuffering, stdout)
 
 import Stackage.Package.Update
 import Stackage.Package.Locations
+import Stackage.Package.Git
 import Stackage.Package.IndexConduit
 
 
@@ -39,17 +40,23 @@ pushRepos :: Repositories -- ^ All three repositories
           -> IO ()
 pushRepos Repositories {..} message = do
   forM_ [allCabalFiles, allCabalHashes, allCabalMetadata] $
-    \repo@Repository {repoInfo = GitInfo {..}} -> do
-      repoCommit repo message
-      run
-        gitLocalPath
-        "git"
-        ["push", gitAddress, concat [gitBranchName, ":", gitBranchName]]
-      -- Tag newly created commit with the same message.
-      repoTag repo message
-      run gitLocalPath "git" ["push", gitAddress, "--tags", "--force"]
-    
-
+    \repo@GitRepository {repoInfo = GitInfo {..}} -> do
+      mcommitRef <- repoCreateCommit repo message
+      case mcommitRef of
+        Nothing -> return ()
+        Just commitRef -> do
+          print commitRef
+          run
+            gitLocalPath
+            "git"
+            ["push", gitAddress, concat [gitBranchName, ":", gitBranchName]]
+          mtagRef <- repoCreateTag repo commitRef message
+          print mtagRef
+          case mtagRef of
+            -- Tag newly created commit with the same message.
+            Just _ -> run gitLocalPath "git" ["push", gitAddress, "--tags", "--force"]
+            Nothing -> return ()
+          return ()
 
 getReposInfo :: FilePath -> String -> GitUser -> IO (GitInfo, GitInfo, GitInfo)
 getReposInfo path account gitUser = do
@@ -181,6 +188,7 @@ optionsParser =
 
 main :: IO ()
 main = do
+  hSetBuffering stdout LineBuffering
   Options {..} <- execParser (info optionsParser fullDesc)
   localPath <- maybe (getEnv "HOME") return oLocalPath
   eS3Bucket <- lookupEnv "S3_BUCKET"
@@ -189,9 +197,9 @@ main = do
       ms3Bucket = msum [oS3Bucket, (BucketName . pack) <$> eS3Bucket]
       gitUser =
         GitUser
-        { userName = oUsername
-        , userEmail = oEmail
-        , userGPG = oGPGSign
+        { userName = S8.pack oUsername
+        , userEmail = S8.pack oEmail
+        , userGpgKey = Just oGPGSign
         }
       getCommitMessage = do
         utcTime <- formatTime defaultTimeLocale "%FT%TZ" <$> getCurrentTime
@@ -201,31 +209,34 @@ main = do
       "WARNING: No s3-bucket is provided. Uploading of 00-index.tar.gz will be disabled."
   indexReq <- parseRequest $ mirrorFPComplete ++ "/01-index.tar.gz"
   reposInfo <- getReposInfo localPath gitAccount gitUser
-  let loop mlastEtag = do
+  let loop repos mlastEtag = do
         putStrLn $ "Checking index, etag == " ++ tshow mlastEtag
-        mnewEtag <-
-          catchAnyDeep
-            (withRepositories reposInfo $
-             \repos -> do
-               commitMessage <- getCommitMessage
-               (updated, mnewEtag) <-
-                 (processIndexUpdate repos indexReq mlastEtag)
-               when updated $
-                 do pushRepos repos commitMessage
-                    case ms3Bucket of
-                      Just s3Bucket ->
-                        updateIndex00
-                          oAwsCredentials
-                          s3Bucket
-                          (allCabalFiles repos)
-                      _ -> return ()
-               return mnewEtag)
-            (\e -> do
-               hPutStrLn stderr $
-                 "ERROR: Received an unexpected exception while updating repositories: " ++
-                 show e
-               return mlastEtag)
-        return ()
-        --threadDelay delay
-        --loop mnewEtag
-  loop Nothing
+        putStrLn "Starting download..."
+        threadDelay 1000000
+        putStrLn "3.."
+        threadDelay 1000000
+        putStrLn "2.."
+        threadDelay 1000000
+        putStrLn "1.."
+        threadDelay 1000000
+        putStrLn "GO!"
+        commitMessage <- getCommitMessage
+        (updated, mnewEtag) <- (processIndexUpdate repos indexReq mlastEtag)
+        when updated $
+          do pushRepos repos commitMessage
+             case ms3Bucket of
+               Just s3Bucket ->
+                 updateIndex00 oAwsCredentials s3Bucket (allCabalFiles repos)
+               _ -> return ()
+        threadDelay delay
+        loop repos mnewEtag
+  let outerLoop = do
+        catchAnyDeep
+          (withRepositories reposInfo $ \repos -> loop repos Nothing)
+          (\e -> do
+             hPutStrLn stderr $
+               "ERROR: Received an unexpected exception while updating repositories: " ++
+               show e
+             threadDelay delay
+             outerLoop)
+  outerLoop

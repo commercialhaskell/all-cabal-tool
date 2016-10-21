@@ -29,6 +29,7 @@ import Network.HTTP.Types (statusCode)
 import Network.HTTP.Simple (httpSink)
 import System.FilePath (dropExtension)
 
+import Stackage.Package.Git
 import Stackage.Package.Locations
 import Stackage.Package.IndexConduit
 
@@ -38,7 +39,7 @@ import Stackage.Package.IndexConduit
 -- 
 entryUpdateHashes
   :: (MonadMask m, MonadIO m)
-  => Repository -> IndexFileEntry -> m ()
+  => GitRepository -> IndexFileEntry -> m ()
 {- Handle a possiblity of malformed 'package.json' file -}
 entryUpdateHashes _ (HashesFileEntry IndexFile {ifParsed = Left err
                                                ,ifPath}) =
@@ -69,7 +70,7 @@ entryUpdateHashes _ _ = return ()
 -- downloads the taralls with source code and saves their the hashes.
 createHashesIfMissing
   :: (MonadMask m, MonadIO m)
-  => Repository -> PackageName -> Version -> m (Maybe (Package Identity))
+  => GitRepository -> PackageName -> Version -> m (Maybe (Package Identity))
 createHashesIfMissing hashesRepo pkgName pkgVersion =
   liftIO $
   do let jsonfp = dropExtension (getCabalFilePath pkgName pkgVersion) <.> "json"
@@ -87,7 +88,7 @@ createHashesIfMissing hashesRepo pkgName pkgVersion =
          case mpackageComputed of
            Nothing -> return Nothing
            Just packageHashes -> do
-             repoWriteFile hashesRepo jsonfp (encode packageHashes)
+             repoWriteFile hashesRepo (makeGitFile jsonfp (encode packageHashes))
              return $ Just packageHashes
 
 -- | Kinda like sequence, except not.

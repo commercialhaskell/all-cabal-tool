@@ -15,6 +15,7 @@ import Data.Yaml as Y (encode)
 import Network.HTTP.Simple (parseRequest, httpJSONEither, getResponseBody)
 
 import Stackage.Package.IndexConduit
+import Stackage.Package.Git
 import Stackage.Package.Locations
 import Stackage.Package.Metadata
 import Stackage.Package.Hashes
@@ -24,7 +25,7 @@ import System.FilePath (takeExtension)
 -- | Download '<repo>/packages/deprecated.json' file from Hackage, parse it and save it
 -- in the repositories under supplied names. Format "yaml" or "json" is guessed
 -- from the file extension.
-saveDeprecated :: [(Repository, FilePath)] -> IO ()
+saveDeprecated :: [(GitRepository, FilePath)] -> IO ()
 saveDeprecated repos = do
   deprecatedJsonReq <- parseRequest hackageDeprecatedUrl
   edeprecated <- getResponseBody <$> httpJSONEither deprecatedJsonReq
@@ -34,27 +35,27 @@ saveDeprecated repos = do
     (\(repo, filename) -> do
        let writeAs ext
              | ext `elem` [".yaml", ".yml"] -- save as YAML
-              = repoWriteFile repo filename . L.fromStrict $ Y.encode deprecated
+              = repoWriteFile repo $ makeGitFile filename (L.fromStrict $ Y.encode deprecated)
              | otherwise -- save as JSON
-              = repoWriteFile repo filename (A.encode deprecated)
+              = repoWriteFile repo $ makeGitFile filename (A.encode deprecated)
        writeAs (toLower $ takeExtension filename))
 
 
 -- | Saves '.cabal' files together with 'preferred-version', but ignores
 -- 'package.json'
 entryUpdateFile
-  :: MonadIO m => Repository -> IndexFileEntry -> m ()
+  :: MonadIO m => GitRepository -> IndexFileEntry -> m ()
 entryUpdateFile allCabalRepo (CabalFileEntry IndexFile {..}) = do
-  liftIO $ repoWriteGitFile allCabalRepo ifGitFile
+  liftIO $ repoWriteFile allCabalRepo ifGitFile
 entryUpdateFile allCabalRepo (PreferredVersionsEntry IndexFile {..}) = do
-  liftIO $ repoWriteGitFile allCabalRepo ifGitFile
+  liftIO $ repoWriteFile allCabalRepo ifGitFile
 entryUpdateFile _ _ = return ()
 
 
 -- | Main `Sink` that uses entries from the 00-index.tar.gz file to update all
 -- relevant files in all three repos.
 allCabalUpdate
-  :: (MonadIO m, MonadMask m, MonadBase base m, PrimMonad base)
+  :: (MonadIO m, MonadMask m)
   => Repositories -> Sink Tar.Entry m ()
 allCabalUpdate Repositories {..} = do
   liftIO $
@@ -71,4 +72,4 @@ allCabalUpdate Repositories {..} = do
            CL.mapM_ (entryUpdateFile allCabalHashes) =$=
            CL.mapM_ (entryUpdateHashes allCabalHashes)) *>
         ZipSink sinkPackageVersions))
-  liftIO $ updateMetadata allCabalMetadata packageVersions
+  liftIO $ updateMetadata allCabalMetadata allCabalFiles packageVersions

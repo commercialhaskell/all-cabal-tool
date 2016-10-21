@@ -14,10 +14,14 @@ cabal-version:       >=1.10
 
 library
   hs-source-dirs:      src
-  exposed-modules:     Stackage.Package.Hashes
+  exposed-modules:
+                       Stackage.Package.Hashes
                      , Stackage.Package.IndexConduit
                      , Stackage.Package.Locations
                      , Stackage.Package.Git
+                     , Stackage.Package.Git.Object
+                     , Stackage.Package.Git.Repository
+                     , Stackage.Package.Git.Types
                      , Stackage.Package.Git.WorkTree
                      , Stackage.Package.Metadata
                      , Stackage.Package.Metadata.Types
