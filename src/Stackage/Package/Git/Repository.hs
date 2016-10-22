@@ -66,11 +66,15 @@ withRepository info@GitInfo {..} action = do
 repoReadFile :: GitRepository -> FilePath -> IO (Maybe LByteString)
 repoReadFile GitRepository {repoInstance = GitInstance {..}} fp = do
   workTree <- readMVar gitWorkTree
-  case lookupFile workTree fp of
-    Just f -> return $ Just $ gitFileContent f
+  let treePath = toTreePath fp
+  case lookupFile workTree treePath of
+    Just f -> do
+      let (G.ObjBlob (G.Blob blob)) =
+            looseUnmarshallZipped $ Zipped $ L.fromStrict $ gitFileZipped f
+      return $ Just blob
     Nothing -> do
       rootTree <- readMVar gitRootTree
-      case lookupFile rootTree fp of
+      case lookupFile rootTree treePath of
         Just ref -> do
           mobj <- getObject gitRepo ref True
           case mobj of
@@ -80,7 +84,7 @@ repoReadFile GitRepository {repoInstance = GitInstance {..}} fp = do
 
 
 -- | Same as `readRepoFile`, but will raise an error if file cannot be found.
-repoReadFile' :: GitRepository -> FilePath -> IO L.ByteString
+repoReadFile' :: GitRepository -> FilePath -> IO LByteString
 repoReadFile' repo@GitRepository {repoInfo = GitInfo {..}} fp = do
   mfile <- repoReadFile repo fp
   case mfile of
@@ -91,19 +95,26 @@ repoReadFile' repo@GitRepository {repoInfo = GitInfo {..}} fp = do
       fp ++ " in repository: " ++ gitLocalPath ++ " under branch: " ++ gitBranchName
 
 
-repoWriteFile :: GitRepository -> GitFile -> IO ()
-repoWriteFile GitRepository {repoInstance = GitInstance {..}} f =
+
+repoWriteFile :: GitRepository -> FilePath -> LByteString -> IO ()
+repoWriteFile repo fp f = makeGitFile f (length f) >>= repoWriteGitFile repo fp
+
+
+
+repoWriteGitFile :: GitRepository -> FilePath -> GitFile -> IO ()
+repoWriteGitFile GitRepository {repoInstance = GitInstance {..}} fp f = do
+  let treePath = toTreePath fp
   withMVar gitRootTree $
-  \rootTree ->
-     modifyMVar_ gitWorkTree $
-     \workTree ->
-        case lookupFile rootTree (gitFilePath f) of
-          Just ref ->
-            return $
-            if ref == gitFileRef f
-              then removeGitFile workTree (gitFilePath f)
-              else insertGitFile workTree f
-          Nothing -> return $ insertGitFile workTree f
+    \rootTree ->
+       modifyMVar_ gitWorkTree $
+       \workTree ->
+          case lookupFile rootTree treePath of
+            Just ref ->
+              return $
+              if ref == gitFileRef f
+                then removeGitFile workTree treePath
+                else insertGitFile workTree treePath f
+            Nothing -> return $ insertGitFile workTree treePath f
 
 
 

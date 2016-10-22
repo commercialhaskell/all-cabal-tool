@@ -14,12 +14,10 @@ import qualified Data.Git as G
 import Data.Git.Ref
 import Data.Git.Storage
 import qualified Data.Map.Strict as Map
-import qualified Data.List as L
 
 import Stackage.Package.Git.Types
 import Stackage.Package.Git.Object
 
---import GHC.DataSize
 
 directoryToTree :: Map.Map FileName (WorkTree Ref Ref) -> G.Tree
 directoryToTree dirMap =
@@ -36,19 +34,8 @@ emptyWorkTree = Directory () Map.empty
 
 
 
-toWorkTreePath :: FilePath -> [FileName]
-toWorkTreePath path = L.foldr toFileName [] splitPath'
-  where
-    splitPath' = S8.split '/' $ S8.pack path
-    toFileName fName []
-      | S.null fName =
-        error $ "Tree path should end with a file name, not a directory: " ++ path
-      | otherwise = [FileName fName]
-    toFileName fDir tp = DirectoryName (S8.snoc fDir '/') : tp
-
-
-insertGitFile :: WorkTree () GitFile -> GitFile -> WorkTree () GitFile
-insertGitFile tree f = insertFileRec tree (toWorkTreePath $ gitFilePath f)
+insertGitFile :: WorkTree () GitFile -> TreePath -> GitFile -> WorkTree () GitFile
+insertGitFile tree path f = insertFileRec tree path
   where
     insertFileRec _ [] = error "Cannot insert a file without a name"
     insertFileRec (Directory _ dirMap) [fName] =
@@ -64,8 +51,8 @@ insertGitFile tree f = insertFileRec tree (toWorkTreePath $ gitFilePath f)
     insertFileRec File {} treePath = insertFileRec (Directory () Map.empty) treePath
 
 
-lookupFile :: WorkTree a f -> FilePath -> Maybe f
-lookupFile tree path = getFile $ lookupRec tree (toWorkTreePath path)
+lookupFile :: WorkTree a f -> TreePath -> Maybe f
+lookupFile tree path = getFile $ lookupRec tree path
   where
     getFile (Just (File f _)) = Just f
     getFile _ = Nothing
@@ -78,8 +65,8 @@ lookupFile tree path = getFile $ lookupRec tree (toWorkTreePath path)
     lookupRec File {} _ = Nothing
 
 
-removeGitFile :: WorkTree () GitFile -> FilePath -> WorkTree () GitFile
-removeGitFile tree path = removeRec tree (toWorkTreePath path)
+removeGitFile :: WorkTree () GitFile -> TreePath -> WorkTree () GitFile
+removeGitFile tree path = removeRec tree path
   where
     removeRec _ [] = error "Cannot remove a file without a name."
     removeRec (Directory _ dirMap) [fileName] =

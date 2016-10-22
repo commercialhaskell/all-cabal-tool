@@ -55,11 +55,9 @@ data GitRepository = GitRepository
 
 
 data GitFile = GitFile
-  { gitFileRef ::  {-# UNPACK #-} !G.Ref
-  , gitFilePath :: FilePath
-  , gitFileType :: FileType
-  , gitFileContentSize :: Word64
-  , gitFileContent :: LByteString
+  { gitFileRef ::  !G.Ref
+  , gitFileType :: !FileType
+  , gitFileZipped :: !ByteString
   }
 
 type GitTree = G.Tree
@@ -70,9 +68,24 @@ type GitTag = G.Tag
 
 
 data FileName
-  = FileName {-# UNPACK #-} !ByteString
-  | DirectoryName {-# UNPACK #-} !ByteString
+  = FileName !ByteString
+  | DirectoryName !ByteString
   deriving (Show)
+
+
+type TreePath = [FileName]
+
+toTreePath :: FilePath -> TreePath
+toTreePath path = foldr toFileName [] splitPath'
+  where
+    splitPath' = S8.split '/' $ S8.pack path
+    toFileName fName []
+      | null fName =
+        error $ "Tree path should end with a file name, not a directory: " ++ path
+      | otherwise = [FileName fName]
+    toFileName fDir tp = DirectoryName (S8.snoc fDir '/') : tp
+
+
 
 
 instance Eq FileName where
@@ -112,8 +125,8 @@ data FileType
   
 
 data WorkTree d f
-  = File {-# UNPACK #-} !f {-# UNPACK #-} !FileType
-  | Directory {-# UNPACK #-} !d {-# UNPACK #-} !(Map.Map FileName (WorkTree d f))
+  = File !f !FileType
+  | Directory !d !(Map.Map FileName (WorkTree d f))
   deriving (Show)
 
 

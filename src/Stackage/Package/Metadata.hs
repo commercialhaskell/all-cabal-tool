@@ -143,20 +143,20 @@ updatePackageIfChanged metadataRepo (IndexFile {ifParsed = ParseOk _ gpd
            putStrLn $
              "METADATA: Cabal file update for:  " ++
              getCabalFilePath ifPackageName pkgVersion
-           repoWriteFile metadataRepo $
-             makeGitFile
-               fp
-               (L.fromStrict . Y.encode $
-                pi
-                { piLatest = pkgVersion
-                , piHash = cabalHash
-                , piAllVersions = versionSet
-                , piSynopsis = pack $ synopsis pd
-                , piAuthor = pack $ author pd
-                , piMaintainer = pack $ maintainer pd
-                , piHomepage = pack $ homepage pd
-                , piLicenseName = pack $ renderDistText $ license pd
-                })
+           repoWriteFile
+             metadataRepo
+             fp
+             (L.fromStrict . Y.encode $
+              pi
+              { piLatest = pkgVersion
+              , piHash = cabalHash
+              , piAllVersions = versionSet
+              , piSynopsis = pack $ synopsis pd
+              , piAuthor = pack $ author pd
+              , piMaintainer = pack $ maintainer pd
+              , piHomepage = pack $ homepage pd
+              , piLicenseName = pack $ renderDistText $ license pd
+              })
        -- Version update or a totally new package.
        _ -> do
          putStrLn $
@@ -191,32 +191,32 @@ updatePackageIfChanged metadataRepo (IndexFile {ifParsed = ParseOk _ gpd
             pkgNameStr ++ " to version: " ++ pkgVersionStr
           let checkCond = getCheckCond gpd
               getDeps' = getDeps checkCond
-          repoWriteFile metadataRepo $
-            makeGitFile
-              fp
-              (L.fromStrict . Y.encode $
-               PackageInfo
-               { piLatest = pkgVersion
-               , piHash = cabalHash
-               , piAllVersions = versionSet
-               , piSynopsis = pack $ synopsis pd
-               , piDescription = desc
-               , piDescriptionType = desct
-               , piChangeLog = cl
-               , piChangeLogType = clt
-               , piBasicDeps =
-                 combineDeps $
-                 maybe id ((:) . getDeps') (condLibrary gpd) $
-                 map (getDeps' . snd) (condExecutables gpd)
-               , piTestBenchDeps =
-                 combineDeps $
-                 map (getDeps' . snd) (condTestSuites gpd) ++
-                 map (getDeps' . snd) (condBenchmarks gpd)
-               , piAuthor = pack $ author pd
-               , piMaintainer = pack $ maintainer pd
-               , piHomepage = pack $ homepage pd
-               , piLicenseName = pack $ renderDistText $ license pd
-               })
+          repoWriteFile
+            metadataRepo
+            fp
+            (L.fromStrict . Y.encode $
+             PackageInfo
+             { piLatest = pkgVersion
+             , piHash = cabalHash
+             , piAllVersions = versionSet
+             , piSynopsis = pack $ synopsis pd
+             , piDescription = desc
+             , piDescriptionType = desct
+             , piChangeLog = cl
+             , piChangeLogType = clt
+             , piBasicDeps =
+               combineDeps $
+               maybe id ((:) . getDeps') (condLibrary gpd) $
+               map (getDeps' . snd) (condExecutables gpd)
+             , piTestBenchDeps =
+               combineDeps $
+               map (getDeps' . snd) (condTestSuites gpd) ++
+               map (getDeps' . snd) (condBenchmarks gpd)
+             , piAuthor = pack $ author pd
+             , piMaintainer = pack $ maintainer pd
+             , piHomepage = pack $ homepage pd
+             , piLicenseName = pack $ renderDistText $ license pd
+             })
     fp =
       "packages" </> (unpack $ toLower $ pack $ take 2 $ pkgNameStr ++ "XX") </>
       pkgNameStr <.>

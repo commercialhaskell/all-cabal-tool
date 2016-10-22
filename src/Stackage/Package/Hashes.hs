@@ -88,7 +88,7 @@ createHashesIfMissing hashesRepo pkgName pkgVersion =
          case mpackageComputed of
            Nothing -> return Nothing
            Just packageHashes -> do
-             repoWriteFile hashesRepo (makeGitFile jsonfp (encode packageHashes))
+             repoWriteFile hashesRepo jsonfp (encode packageHashes)
              return $ Just packageHashes
 
 -- | Kinda like sequence, except not.

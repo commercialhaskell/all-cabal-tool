@@ -34,36 +34,19 @@ data GitObject
   | Tag GitTag
 
 
-makeGitFileM
-  :: (Monad m)
-  => FilePath -> LByteString -> m GitFile
-makeGitFileM fp lbs = do
+-- makeGitFileM
+--   :: (Monad m)
+--   => FilePath -> LByteString -> Word64 -> m GitFile
+makeGitFile lbs sz = do
   let content = looseMarshall (ObjBlob (G.Blob lbs))
-  sha1 <- runConduit $ (sourceLazy content) =$= sha1Sink
+  (sha1, zipped) <- runConduit $ (sourceLazy content)
+    =$= getZipSink ((,) <$> ZipSink sha1Sink <*> ZipSink compressSink)
   return $
     GitFile
     { gitFileRef = unDigestRef sha1
-    , gitFilePath = fp
     , gitFileType = RegularFile NonExecFile
-    , gitFileContent = lbs
-    , gitFileContentSize = fromIntegral $ L.length lbs -- TODO : get it from tarball info.
+    , gitFileZipped = zipped
     }
-
-
-makeGitFile
-  :: FilePath -> LByteString -> GitFile
-makeGitFile fp lbs =
-  GitFile
-  { gitFileRef = ref
-  , gitFilePath = fp
-  , gitFileType = RegularFile NonExecFile
-  , gitFileContent = lbs
-  , gitFileContentSize = fromIntegral $ L.length lbs
-  }
-  where
-    content = looseMarshall (ObjBlob (G.Blob lbs))
-    ref = hashLBS content
-
 
 
 -- | Creates a simplified git commit.
@@ -101,8 +84,7 @@ makeGitTag commitRef gitUser tagStr tagMessage = do
 
 
 marshallObject :: GitObject -> (Ref, LByteString)
-marshallObject (Blob o) = (hashLBS content, Zlib.compress content)
-  where content = looseMarshall . ObjBlob . G.Blob $ gitFileContent o
+marshallObject (Blob f) = (gitFileRef f, L.fromStrict $ gitFileZipped f)
 marshallObject (Tree o) = (hashLBS content, Zlib.compress content)
   where content = looseMarshall $ ObjTree o
 marshallObject (Commit o) = (hashLBS content, Zlib.compress content)
@@ -119,10 +101,10 @@ srcWithHeader oType oContent oSize =
   L.append (L.fromChunks [oType, " ", S8.pack $ show oSize, S.singleton 0]) oContent
 
 
-zipSink
+compressSink
   :: (MonadBase base m, PrimMonad base, MonadThrow m)
   => Consumer ByteString m ByteString
-zipSink = compress 1 defaultWindowBits =$= foldC
+compressSink = compress 1 defaultWindowBits =$= foldC
 
 
 sha1Sink :: (Monad m) => Consumer ByteString m (Digest SHA1)
