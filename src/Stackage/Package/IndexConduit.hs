@@ -110,6 +110,8 @@ data Cabal = Cabal
   , cabalParsed :: ParseResult GenericPackageDescription
   }
 
+
+
 data PackageHashes = PackageHashes
   { packageHashes :: HackageHashes
   , packageVersion :: Version
@@ -124,7 +126,7 @@ data IndexEntry =
 
 
 makeIndexFile
-  :: (Monad m)
+  :: (MonadBase base m, PrimMonad base, MonadThrow m)
   => PackageName
   -> Maybe Version
   -> FilePath
@@ -133,7 +135,7 @@ makeIndexFile
   -> p
   -> m (IndexFile p)
 makeIndexFile packageName mpackageVersion fileName filePath raw p = do
-  gitFile <- makeGitFileM filePath raw
+  gitFile <- makeGitFile raw (length raw)
   return $
     IndexFile
     { ifPackageName = packageName
@@ -190,9 +192,6 @@ getCabalFilePath (renderDistText -> pkgName) (renderDistText -> pkgVersion) =
   pkgName </> pkgVersion </> pkgName <.> "cabal"
 
 
-getCabalFile
-  :: (Monad m)
-  => PackageName -> Version -> L.ByteString -> m CabalFile
 getCabalFile pkgName pkgVersion lbs =
   makeIndexFile
     pkgName
@@ -206,7 +205,7 @@ getCabalFile pkgName pkgVersion lbs =
     dropBOM t = fromMaybe t $ TL.stripPrefix (pack "\xFEFF") t
 
 indexFileEntryConduit
-  :: (Monad m)
+  :: (MonadBase base m, PrimMonad base, MonadThrow m)
   => Conduit Tar.Entry m IndexFileEntry
 indexFileEntryConduit = CL.mapMaybeM getIndexFileEntry
   where
