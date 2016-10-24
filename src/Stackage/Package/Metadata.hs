@@ -37,7 +37,6 @@ import Distribution.PackageDescription
         condBenchmarks, condExecutables, condLibrary, condTestSuites,
         description, genPackageFlags, homepage, license, maintainer,
         package, packageDescription, synopsis)
-import Distribution.PackageDescription.Parse (ParseResult(..))
 import Distribution.System (Arch(X86_64), OS(Linux))
 import Distribution.Version
        (VersionRange, intersectVersionRanges, simplifyVersionRange,
@@ -57,21 +56,24 @@ import Stackage.Package.Locations
 -- such are provided.
 sinkPackageVersions
   :: Monad m
-  => Consumer IndexFileEntry m (Map PackageName (Set Version, Maybe VersionRange))
+  => Consumer IndexEntry m (Map PackageName (Set Version, Maybe VersionRange))
 sinkPackageVersions = CL.fold trackVersions Map.empty
   where
     updateVersionSetMap (newSet, _) (oldSet, moldRange) =
       (Set.union newSet oldSet, moldRange)
     -- in case that new range is Nothing, previous range is cleared.
     updateVersionRangeMap (_, mnewRange) (oldSet, _) = (oldSet, mnewRange)
-    trackVersions versionsMap (PreferredVersionsEntry IndexFile {..}) =
-      Map.insertWith updateVersionRangeMap ifPackageName (Set.empty, ifParsed) versionsMap
-    trackVersions versionsMap (CabalFileEntry (IndexFile {ifPackageVersion = Just pkgVersion
-                                                         ,..})) =
+    trackVersions versionsMap (VersionsEntry IndexFile {..}) =
+      Map.insertWith
+        updateVersionRangeMap
+        ifPackageName
+        (Set.empty, Just $ versionsPreferred ifFile)
+        versionsMap
+    trackVersions versionsMap (CabalEntry IndexFile {..}) =
       Map.insertWith
         updateVersionSetMap
         ifPackageName
-        (Set.singleton pkgVersion, Nothing)
+        (Set.singleton (cabalVersion ifFile), Nothing)
         versionsMap
     trackVersions versionsMap _ = versionsMap
 
@@ -109,28 +111,23 @@ updateMetadata metadataRepo cabalFilesRepo pkgVersions =
              ". Using all available versions for metadata."
            bls <-
              repoReadFile' cabalFilesRepo (getCabalFilePath pkgName pkgVersion)
-           cabalFile <- getCabalFile pkgName pkgVersion bls
            return
-             (cabalFile, preferredVersionSetNonEmpty)
+             (parseCabalFile pkgName pkgVersion bls, preferredVersionSetNonEmpty)
      CL.unfold fromVersions pkgVersions =$= CL.mapM readCabalFile $$
        CL.mapM_ (updatePackageIfChanged metadataRepo)
 
 updatePackageIfChanged
   :: MonadIO m
   => GitRepository -> (CabalFile, Set Version) -> m ()
-updatePackageIfChanged _ (IndexFile {ifParsed = ParseFailed pe
-                                    ,..}, _) =
-  error $ show (ifPackageName, ifPackageVersion, pe)
-updatePackageIfChanged metadataRepo (IndexFile {ifParsed = ParseOk _ gpd
-                                               ,..}, versionSet) =
+updatePackageIfChanged metadataRepo (CabalFile {..}, versionSet) =
   liftIO $
-  do when (Just pkgVersion /= ifPackageVersion) $
+  do when (pkgVersionMax /= cfPackageVersion) $
        error $
        "Internal error, metadata package update version mismatch: " ++
-       show (ifPackageName, ifPackageVersion, pkgVersion)
-     when (package pd /= PackageIdentifier ifPackageName pkgVersion) $
+       show (cfPackageName, cfPackageVersion, pkgVersionMax)
+     when (package pd /= PackageIdentifier cfPackageName cfPackageVersion) $
        error $
-       show ("mismatch" :: String, ifPackageName, ifPackageVersion, package pd)
+       show ("mismatch" :: String, cfPackageName, cfPackageVersion, package pd)
      mepi <- fmap (Y.decodeEither . L.toStrict) <$> repoReadFile metadataRepo fp
      case mepi of
        Just (Right pi)
@@ -139,16 +136,13 @@ updatePackageIfChanged metadataRepo (IndexFile {ifParsed = ParseOk _ gpd
        Just (Right pi)
        -- Current version hasn't changed, hence data in the sdist.tar.gz is stil
        -- the same, updating cabal related info only.
-         | pkgVersion == piLatest pi -> do
-           putStrLn $
-             "METADATA: Cabal file update for:  " ++
-             getCabalFilePath ifPackageName pkgVersion
+         | pkgVersionMax == piLatest pi ->
            repoWriteFile
              metadataRepo
              fp
              (L.fromStrict . Y.encode $
               pi
-              { piLatest = pkgVersion
+              { piLatest = pkgVersionMax
               , piHash = cabalHash
               , piAllVersions = versionSet
               , piSynopsis = pack $ synopsis pd
@@ -158,14 +152,12 @@ updatePackageIfChanged metadataRepo (IndexFile {ifParsed = ParseOk _ gpd
               , piLicenseName = pack $ renderDistText $ license pd
               })
        -- Version update or a totally new package.
-       _ -> do
-         putStrLn $
-           "METADATA: New package version: " ++ getCabalFilePath ifPackageName pkgVersion
-         updatePackage
+       _ -> updatePackage
   where
-    pkgNameStr = renderDistText ifPackageName
-    pkgVersionStr = renderDistText pkgVersion
-    pkgVersion = Set.findMax versionSet
+    pkgNameStr = renderDistText cfPackageName
+    pkgVersionStr = renderDistText pkgVersionMax
+    pkgVersionMax = Set.findMax versionSet
+    gpd = cfPackageDescription
     pd = packageDescription gpd
     url =
       concat
@@ -196,7 +188,7 @@ updatePackageIfChanged metadataRepo (IndexFile {ifParsed = ParseOk _ gpd
             fp
             (L.fromStrict . Y.encode $
              PackageInfo
-             { piLatest = pkgVersion
+             { piLatest = pkgVersionMax
              , piHash = cabalHash
              , piAllVersions = versionSet
              , piSynopsis = pack $ synopsis pd
@@ -221,7 +213,7 @@ updatePackageIfChanged metadataRepo (IndexFile {ifParsed = ParseOk _ gpd
       "packages" </> (unpack $ toLower $ pack $ take 2 $ pkgNameStr ++ "XX") </>
       pkgNameStr <.>
       "yaml"
-    cabalHash = unDigest SHA256 $ hashlazy ifRaw
+    cabalHash = unDigest SHA256 $ hashlazy cfRaw
     goEntry :: (Text, Text, Text, Text) -> Tar.Entry -> (Text, Text, Text, Text)
     goEntry orig@(desc, desct, cl, clt) e =
       case (toEntryType $ Tar.entryPath e, toText $ Tar.entryContent e) of

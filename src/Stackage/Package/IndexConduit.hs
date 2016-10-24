@@ -1,4 +1,3 @@
-{-# LANGUAGE CPP #-}
 {-# LANGUAGE BangPatterns #-}
 {-# LANGUAGE FlexibleContexts #-}
 {-# LANGUAGE OverloadedStrings #-}
@@ -10,16 +9,16 @@ module Stackage.Package.IndexConduit
   ( parseDistText
   , renderDistText
   , getCabalFilePath
-  , getCabalFile
   , getPackageFullName
   , indexFileEntryConduit
   , sourceEntries
   , httpTarballSink
   , IndexFile(..)
-  , IndexFileEntry(..)
+  , Cabal(..)
+  , Versions(..)
+  , HackagePackage(..)
+  , IndexEntry(..)
   , HackageHashes(..)
-  , CabalFile
-  , HackageHashesFile
   ) where
 
 import ClassyPrelude.Conduit
@@ -31,17 +30,12 @@ import qualified Data.ByteString.Lazy.Char8 as L8
 import qualified Data.Conduit.List as CL
 import Data.Conduit.Lazy (lazyConsume)
 import Data.Conduit.Zlib
-import Data.Text.Encoding.Error (lenientDecode)
-import qualified Data.Text.Lazy as TL (stripPrefix)
-import Data.Text.Lazy.Encoding (decodeUtf8With)
+import Data.Foldable (msum)
 import Data.Version (Version)
 import Distribution.Compat.ReadP (readP_to_S)
 import Distribution.Package (PackageName)
-import Distribution.PackageDescription (GenericPackageDescription)
-import Distribution.PackageDescription.Parse
-       (ParseResult, parsePackageDescription)
 import Distribution.Text (disp, parse)
-import Distribution.Version (VersionRange)
+import Distribution.Version (VersionRange, anyVersion)
 import qualified Distribution.Text
 import Network.HTTP.Client.Conduit
 import Text.PrettyPrint (render)
@@ -85,71 +79,37 @@ sourceEntries (Tar.Fail e) = throwM e
 
 
 
-data IndexFile p = IndexFile
-  { ifPackageName :: !PackageName
-  , ifPackageVersion :: !(Maybe Version)
-  , ifFileName :: !FilePath
-  , ifPath :: !FilePath
-  , ifRaw :: L.ByteString
-  , ifGitFile :: GitFile
-  , ifParsed :: p
-  }
-
-{-
 data IndexFile f = IndexFile
   { ifPackageName :: !PackageName
-  , ifFileName :: !FilePath
   , ifPath :: !FilePath
-  , ifRaw :: L.ByteString
-  , ifFile :: f
+  , ifFile :: !f
   }
 
 data Cabal = Cabal
-  { cabalVersion :: Version
-  , cabalGitFile :: GitFile
-  , cabalParsed :: ParseResult GenericPackageDescription
+  { cabalVersion :: !Version
+  , cabalGitFile :: !GitFile
   }
 
-
-
-data PackageHashes = PackageHashes
-  { packageHashes :: HackageHashes
-  , packageVersion :: Version
+data Versions = Versions
+  { versionsPreferred :: !VersionRange
+  , versionsGitFile :: !GitFile
   }
 
-data IndexEntry =
-  CabalEntry (IndexFile Cabal)
-  PackageEntry (IndexFile PackageHashes)
-  VersionsEntry (IndexFile VersionRange)
-  UnknownEntry (IndexFile ())
--}
+data HackagePackage = HackagePackage
+  { hackageHashes :: !HackageHashes
+  , hackageVersion :: !Version
+  }
 
+data IndexEntry
+  = CabalEntry !(IndexFile Cabal)
+  | PackageEntry !(IndexFile HackagePackage)
+  | VersionsEntry !(IndexFile Versions)
+  | UnknownEntry !FilePath
 
-makeIndexFile
-  :: (MonadBase base m, PrimMonad base, MonadThrow m)
-  => PackageName
-  -> Maybe Version
-  -> FilePath
-  -> FilePath
-  -> L.ByteString
-  -> p
-  -> m (IndexFile p)
-makeIndexFile packageName mpackageVersion fileName filePath raw p = do
-  gitFile <- makeGitFile raw (length raw)
-  return $
-    IndexFile
-    { ifPackageName = packageName
-    , ifPackageVersion = mpackageVersion
-    , ifFileName = fileName
-    , ifPath = filePath
-    , ifRaw = raw
-    , ifGitFile = gitFile
-    , ifParsed = p
-    }
 
 data HackageHashes = HackageHashes
-  { hHashes :: Map Text Text
-  , hLength :: Word64
+  { hHashes :: !(Map Text Text)
+  , hLength :: !Word64
   }
 
 instance FromJSON HackageHashes where
@@ -174,25 +134,14 @@ decodeHackageHashes pkgName pkgVersion lbs = do
       target <- targets .: pack targetKey
       parseJSON target
 
-type CabalFile = IndexFile (ParseResult GenericPackageDescription)
-
-type HackageHashesFile = IndexFile (Either String HackageHashes)
-
--- | Versions file can be empty - `Nothing`, which means preference list was cleared.
-type PreferredVersionsFile = IndexFile (Maybe VersionRange)
-
-data IndexFileEntry
-  = CabalFileEntry CabalFile
-  | HashesFileEntry HackageHashesFile
-  | PreferredVersionsEntry PreferredVersionsFile
-  | UnrecognizedEntry (IndexFile ())
 
 getCabalFilePath :: PackageName -> Version -> FilePath
 getCabalFilePath (renderDistText -> pkgName) (renderDistText -> pkgVersion) =
   pkgName </> pkgVersion </> pkgName <.> "cabal"
 
-
-getCabalFile pkgName pkgVersion lbs =
+{-
+getCabalFile pkgName pkgVersion lbs = do
+  gitFile < makeGitFile lbs
   makeIndexFile
     pkgName
     (Just pkgVersion)
@@ -203,10 +152,97 @@ getCabalFile pkgName pkgVersion lbs =
 -- https://github.com/haskell/hackage-server/issues/351
   where
     dropBOM t = fromMaybe t $ TL.stripPrefix (pack "\xFEFF") t
-
+-}
 indexFileEntryConduit
   :: (MonadBase base m, PrimMonad base, MonadThrow m)
-  => Conduit Tar.Entry m IndexFileEntry
+  => Conduit Tar.Entry m IndexEntry
+indexFileEntryConduit = CL.mapMaybeM getIndexFileEntry
+  where
+    getIndexFileEntry e@(Tar.entryContent -> Tar.NormalFile lbs sz) = do
+      case (toPkgVer $ Tar.entryPath e) of
+        Just (pkgName, Nothing, "preferred-versions") ->
+          case mpkgVersionRange of
+            Nothing -> return $ Just $ UnknownEntry $ Tar.entryPath e
+            Just pkgVersionRange -> do
+              gitFile <- makeGitFile lbs (fromIntegral sz)
+              return $
+                Just $
+                VersionsEntry $
+                IndexFile
+                { ifPackageName = pkgName
+                , ifPath = Tar.entryPath e
+                , ifFile =
+                  Versions
+                  { versionsPreferred = pkgVersionRange
+                  , versionsGitFile = gitFile
+                  }
+                }
+          where (pkgNameStr, range) = break (== ' ') $ L8.unpack lbs
+                mpkgVersionRange =
+                  msum
+                    [ do guard (sz == 0)
+                         Just anyVersion
+                    , do pkgVersionRange' <- parseDistText range
+                         pkgName' <- parseDistText pkgNameStr
+                         guard (pkgName == pkgName')
+                         Just pkgVersionRange'
+                    ]
+        Just (pkgName, Just pkgVersion, "package.json") -> do
+          return $
+            Just $
+            PackageEntry $
+            IndexFile
+            { ifPackageName = pkgName
+            , ifPath = Tar.entryPath e
+            , ifFile =
+              HackagePackage
+              { hackageHashes = hashes
+              , hackageVersion = pkgVersion
+              }
+            }
+          where hashes =
+                  case decodeHackageHashes pkgName pkgVersion lbs of
+                    Left err ->
+                      error $
+                      "Stackage.Hackage.Hashes.entryUpdateHashes: There was an issue parsing: " ++
+                      Tar.entryPath e ++ ". Parsing error: " ++ err
+                    Right parsedHashes -> parsedHashes
+        Just (pkgName, Just pkgVersion, _)
+          | getCabalFilePath pkgName pkgVersion == Tar.entryPath e -> do
+            gitFile <- makeGitFile lbs (fromIntegral sz)
+            return $
+              Just $
+              CabalEntry $
+              IndexFile
+              { ifPackageName = pkgName
+              , ifPath = Tar.entryPath e
+              , ifFile =
+                Cabal
+                { cabalVersion = pkgVersion
+                , cabalGitFile = gitFile
+                }
+              }
+        _ -> return $ Just $ UnknownEntry $ Tar.entryPath e
+    -- Filter out entries that are not actual files.
+    getIndexFileEntry _ = return Nothing
+    toPkgVer s0 = do
+      (pkgName', '/':s1) <- Just $ break (== '/') s0
+      pkgName <- parseDistText pkgName'
+      (mpkgVersion, fileName) <-
+        case break (== '/') s1 of
+          (fName, []) -> Just (Nothing, fName)
+          (pkgVersion', '/':fName) -> do
+            guard ('/' `onotElem` fName)
+            pkgVersion <- parseDistText pkgVersion'
+            return $ (Just pkgVersion, fName)
+          _ -> Nothing
+      return (pkgName, mpkgVersion, fileName)
+
+
+{-
+indexFileEntryConduit
+  :: (MonadBase base m, PrimMonad base, MonadThrow m)
+  => Conduit Tar.Entry m IndexEntry
 indexFileEntryConduit = CL.mapMaybeM getIndexFileEntry
   where
     getIndexFileEntry e@(Tar.entryContent -> Tar.NormalFile lbs _) = do
@@ -249,6 +285,7 @@ indexFileEntryConduit = CL.mapMaybeM getIndexFileEntry
             return $ (Just pkgVersion, fName)
           _ -> Nothing
       return (pkgName, mpkgVersion, fileName)
+-}
 
 parseDistText
   :: (Monad m, Distribution.Text.Text t)

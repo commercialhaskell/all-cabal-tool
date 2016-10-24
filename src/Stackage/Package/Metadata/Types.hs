@@ -1,11 +1,15 @@
 {-# LANGUAGE DeriveDataTypeable #-}
 {-# LANGUAGE OverloadedStrings #-}
+{-# LANGUAGE NoImplicitPrelude #-}
 
 module Stackage.Package.Metadata.Types
   ( PackageInfo(..)
   , Deprecation(..)
+  , CabalFile(..)
+  , parseCabalFile
   ) where
 
+import ClassyPrelude.Conduit hiding (pi)
 import Data.Aeson
        (FromJSON(..), ToJSON(..), object, withObject, (.:), (.=))
 import Data.Map (Map)
@@ -13,13 +17,20 @@ import qualified Data.Map as Map
 import Data.Set (Set)
 import qualified Data.Set as Set
 import Data.Text (Text)
+import Data.Text.Encoding.Error (lenientDecode)
+import qualified Data.Text.Lazy as TL (stripPrefix)
+import Data.Text.Lazy.Encoding (decodeUtf8With)
 import Data.Typeable (Typeable)
 import Data.Version (Version)
-import Distribution.Package (PackageName)
+import Distribution.Package (PackageName, PackageIdentifier(PackageIdentifier))
+import Distribution.PackageDescription
+       (GenericPackageDescription(..), PackageDescription(..))
+import Distribution.PackageDescription.Parse
+       (ParseResult(..), parsePackageDescription)
 import Distribution.Version (VersionRange)
-import Prelude hiding (pi)
 import Stackage.Package.IndexConduit
-       (parseDistText, renderDistText)
+       (parseDistText, renderDistText, getCabalFilePath)
+
 
 data PackageInfo = PackageInfo
   { piLatest :: !Version
@@ -97,3 +108,41 @@ instance FromJSON Deprecation where
   parseJSON =
     withObject "Deprecation" $
     \o -> Deprecation <$> o .: "deprecated-package" <*> o .: "in-favour-of"
+
+
+data CabalFile = CabalFile
+  { cfRaw :: LByteString
+  , cfPackageName :: !PackageName
+  , cfPackageVersion :: !Version
+  , cfPackageDescription :: !GenericPackageDescription
+  }
+
+
+parseCabalFile :: PackageName -> Version -> LByteString -> CabalFile
+parseCabalFile pkgName pkgVersion lbs =
+  CabalFile
+  { cfRaw = lbs
+  , cfPackageName = pkgName
+  , cfPackageVersion = pkgVersion
+  , cfPackageDescription = pkgDescription
+  }
+  where
+    pkgDescription =
+      case parseResult of
+        ParseFailed perr ->
+          error $
+          "Stackage.Package.Metadata.Types.parseCabalFile: " ++
+          "Error parsing cabal file <" ++
+          getCabalFilePath pkgName pkgVersion ++ ">: " ++ show perr
+        ParseOk _ gpd
+          | package (packageDescription gpd) /= PackageIdentifier pkgName pkgVersion ->
+            error $
+            "Stackage.Package.Metadata.Types.parseCabalFile: " ++
+            "parsed package identification mismatch: " ++
+            show (PackageIdentifier pkgName pkgVersion)
+        ParseOk _ gpd -> gpd
+    -- https://github.com/haskell/hackage-server/issues/351
+    dropBOM t = fromMaybe t $ TL.stripPrefix (pack "\xFEFF") t
+    parseResult =
+      parsePackageDescription $
+      unpack $ dropBOM $ decodeUtf8With lenientDecode lbs
