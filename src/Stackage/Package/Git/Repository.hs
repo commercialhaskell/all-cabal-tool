@@ -97,7 +97,7 @@ repoReadFile' repo@GitRepository {repoInfo = GitInfo {..}} fp = do
 
 
 repoWriteFile :: GitRepository -> FilePath -> LByteString -> IO ()
-repoWriteFile repo fp f = makeGitFile f (length f) >>= repoWriteGitFile repo fp
+repoWriteFile repo fp f = makeGitFile f (fromIntegral $ length f) >>= repoWriteGitFile repo fp
 
 
 

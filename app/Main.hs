@@ -211,15 +211,6 @@ main = do
   reposInfo <- getReposInfo localPath gitAccount gitUser
   let loop repos mlastEtag = do
         putStrLn $ "Checking index, etag == " ++ tshow mlastEtag
-        putStrLn "Starting download..."
-        threadDelay 1000000
-        putStrLn "3.."
-        threadDelay 1000000
-        putStrLn "2.."
-        threadDelay 1000000
-        putStrLn "1.."
-        threadDelay 1000000
-        putStrLn "GO!"
         commitMessage <- getCommitMessage
         (updated, mnewEtag) <- (processIndexUpdate repos indexReq mlastEtag)
         when updated $

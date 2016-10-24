@@ -44,11 +44,11 @@ saveDeprecated repos = do
 -- | Saves '.cabal' files together with 'preferred-version', but ignores
 -- 'package.json'
 entryUpdateFile
-  :: MonadIO m => GitRepository -> IndexFileEntry -> m ()
-entryUpdateFile allCabalRepo (CabalFileEntry IndexFile {..}) = do
-  liftIO $ repoWriteGitFile allCabalRepo ifPath ifGitFile
-entryUpdateFile allCabalRepo (PreferredVersionsEntry IndexFile {..}) = do
-  liftIO $ repoWriteGitFile allCabalRepo ifPath ifGitFile
+  :: MonadIO m => GitRepository -> IndexEntry -> m ()
+entryUpdateFile allCabalRepo (CabalEntry IndexFile {..}) = do
+  liftIO $ repoWriteGitFile allCabalRepo ifPath (cabalGitFile ifFile)
+entryUpdateFile allCabalRepo (VersionsEntry IndexFile {..}) = do
+  liftIO $ repoWriteGitFile allCabalRepo ifPath (versionsGitFile ifFile)
 entryUpdateFile _ _ = return ()
 
 

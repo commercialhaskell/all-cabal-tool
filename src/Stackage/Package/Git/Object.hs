@@ -33,13 +33,12 @@ data GitObject
   | Commit GitCommit
   | Tag GitTag
 
-
--- makeGitFileM
---   :: (Monad m)
---   => FilePath -> LByteString -> Word64 -> m GitFile
+makeGitFile
+  :: (MonadThrow m, PrimMonad base, MonadBase base m) =>
+     LByteString -> Word64 -> m GitFile
 makeGitFile lbs sz = do
-  let content = looseMarshall (ObjBlob (G.Blob lbs))
-  (sha1, zipped) <- runConduit $ (sourceLazy content)
+  --let content = looseMarshall (ObjBlob (G.Blob lbs))
+  (sha1, zipped) <- runConduit $ srcWithHeader "blob" lbs sz
     =$= getZipSink ((,) <$> ZipSink sha1Sink <*> ZipSink compressSink)
   return $
     GitFile

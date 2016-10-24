@@ -55,10 +55,10 @@ data GitRepository = GitRepository
 
 
 data GitFile = GitFile
-  { gitFileRef ::  !G.Ref
+  { gitFileRef :: !G.Ref
   , gitFileType :: !FileType
   , gitFileZipped :: !ByteString
-  }
+  } deriving (Show)
 
 type GitTree = G.Tree
 
