@@ -1,3 +1,4 @@
+{-# LANGUAGE FlexibleInstances #-}
 {-# LANGUAGE RecordWildCards #-}
 {-# LANGUAGE NoImplicitPrelude #-}
 module Stackage.Package.Git.Types where
@@ -5,6 +6,7 @@ module Stackage.Package.Git.Types where
 import ClassyPrelude.Conduit
 import qualified Data.ByteString.Char8 as S8
 import Data.Bits
+import Data.Git.Ref
 import qualified Data.Map as Map
 import Data.Word (Word32)
 import Data.Hourglass (timeFromElapsed)
@@ -129,6 +131,12 @@ data WorkTree d f
   | Directory !d !(Map.Map FileName (WorkTree d f))
   deriving (Show)
 
+
+instance Eq (WorkTree Ref Ref) where
+  (File ref1 t1) == (File ref2 t2) = ref1 == ref2 && t1 == t2
+  (Directory ref1 _) == (Directory ref2 _) = ref1 == ref2
+  _ == _ = False
+  
 
 
 getPerson :: GitUser -> IO G.Person

@@ -94,7 +94,7 @@ readWorkTree repo rootRef = readTreeRec rootRef
         return (DirectoryName $ S8.snoc (toBytes ent) '/', directory)
       | otherwise = error $ "Unsupported file mode: " ++ show mode
     readTreeRec ref = do
-      (G.Tree tree) <- G.getTree repo ref
+      G.Tree tree <- G.getTree repo ref
       files <- mapM readTreeFile tree
       return $ Directory ref $ Map.fromAscList files
 
@@ -122,14 +122,16 @@ diveTreePersist repo (Directory _ dirMap) = do
 
 flushWorkTree :: GitRepository -> IO (Maybe Ref)
 flushWorkTree repo@GitRepository {repoInstance = GitInstance {..}} = do
-  modifyMVar gitWorkTree $ \workTree -> do
-    mnewRootRef <- modifyMVar gitRootTree $ \rootTree -> do
-      newRootTree <- flushWorkTreeRec rootTree workTree
-      if getTreeRef newRootTree == getTreeRef rootTree
-        then return (newRootTree, Nothing)
-        else return (newRootTree, Just $ getTreeRef newRootTree)
-    return (emptyWorkTree, mnewRootRef)
-  
+  modifyMVar gitWorkTree $
+    \workTree -> do
+      mnewRootRef <-
+        modifyMVar gitRootTree $
+        \rootTree -> do
+          newRootTree <- flushWorkTreeRec rootTree workTree
+          if getTreeRef newRootTree == getTreeRef rootTree
+            then return (newRootTree, Nothing)
+            else return (newRootTree, Just $ getTreeRef newRootTree)
+      return (emptyWorkTree, mnewRootRef)
   where
     flushWorkTreeRec (File ref _) file@(File f t2)
       | ref == gitFileRef f = return $ File ref t2
@@ -139,7 +141,7 @@ flushWorkTree repo@GitRepository {repoInstance = GitInstance {..}} = do
     flushWorkTreeRec (File {}) d2@(Directory _ _) = do
       diveTreePersist repo d2
     flushWorkTreeRec d1@(Directory _ dirMap1) (Directory _ dirMap2)
-      {- Empty folder: unchanged -}
+                                              {- Empty folder: unchanged -}
       | Map.null dirMap2 = return d1
       | otherwise = do
         let unchangedMap = Map.difference dirMap1 dirMap2
@@ -152,8 +154,8 @@ flushWorkTree repo@GitRepository {repoInstance = GitInstance {..}} = do
             changedDirs = Map.toAscList $ Map.difference dirMap2 newMap
         commonDirs <-
           zipWithM flushWorkTreeRec (map snd oldDirs) (map snd changedDirs)
-        let newDirMap =
-              Map.union distinctMap $
-              Map.fromAscList $ zip (map fst changedDirs) commonDirs
-        persistGitTree repo newDirMap
-        
+        let updatedMap = Map.fromAscList $ zip (map fst changedDirs) commonDirs
+        let newDirMap = Map.union distinctMap updatedMap
+        if newDirMap == dirMap1
+          then return d1
+          else persistGitTree repo newDirMap

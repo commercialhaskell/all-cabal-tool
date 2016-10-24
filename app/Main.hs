@@ -10,7 +10,7 @@ module Main where
 import ClassyPrelude.Conduit hiding ((<>))
 import Data.Conduit.Lazy (MonadActive)
 import Data.Conduit.Zlib (gzip)
-import qualified Data.ByteString.Char8 as S8 (pack)
+import qualified Data.ByteString.Char8 as S8 (pack, unpack)
 import Control.Lens (set)
 import Control.Monad (msum)
 import Control.Monad.Trans.AWS (trying, _Error)
@@ -27,6 +27,7 @@ import Network.HTTP.Simple
 import Options.Applicative
 import System.Environment (getEnv, lookupEnv)
 import System.IO (BufferMode(LineBuffering), hSetBuffering, stdout)
+import System.IO.Temp (withSystemTempDirectory)
 
 import Stackage.Package.Update
 import Stackage.Package.Locations
@@ -76,22 +77,20 @@ getReposInfo path account gitUser = do
       }
     , allCabalMetadataInfo)
   
-updateIndex00 = undefined
-{-
 -- | Upload an oldstyle '00-index.tar.gz' (i.e. without package.json files) to
 -- an S3 bucket.
-updateIndex00 :: Credentials -> BucketName -> Repository -> IO ()
-updateIndex00 awsCreds bucketName Repository {repoTagName = Just tag
-                                       ,..} = do
+updateIndex00 :: Credentials -> BucketName -> GitRepository -> IO ()
+updateIndex00 awsCreds bucketName GitRepository {repoInfo = GitInfo {gitTagName = Just tagName
+                                                                    ,..}} = do
   env <- newEnv NorthVirginia awsCreds
   withSystemTempDirectory
     "00-index"
     (\tmpDir -> do
        let indexFP = tmpDir </> "00-index.tar"
        run
-         repoLocalPath
+         gitLocalPath
          "git"
-         ["archive", tag, "--format", "tar", "-o", indexFP]
+         ["archive", S8.unpack tagName, "--format", "tar", "-o", indexFP]
        index00 <- runResourceT $ (sourceFile indexFP =$= gzip $$ foldC)
        let key = ObjectKey "00-index.tar.gz"
            po =
@@ -102,7 +101,6 @@ updateIndex00 awsCreds bucketName Repository {repoTagName = Just tag
          Left e -> error $ show (key, e)
          Right _ -> putStrLn "Success")
 updateIndex00 _ _ _ = return ()
--}
 
 processIndexUpdate
   :: (MonadActive m, MonadIO m, MonadMask m, MonadBaseControl IO m)
@@ -209,7 +207,7 @@ main = do
       "WARNING: No s3-bucket is provided. Uploading of 00-index.tar.gz will be disabled."
   indexReq <- parseRequest $ mirrorFPComplete ++ "/01-index.tar.gz"
   reposInfo <- getReposInfo localPath gitAccount gitUser
-  let loop repos mlastEtag = do
+  let innerLoop repos mlastEtag = do
         putStrLn $ "Checking index, etag == " ++ tshow mlastEtag
         commitMessage <- getCommitMessage
         (updated, mnewEtag) <- (processIndexUpdate repos indexReq mlastEtag)
@@ -220,10 +218,10 @@ main = do
                  updateIndex00 oAwsCredentials s3Bucket (allCabalFiles repos)
                _ -> return ()
         threadDelay delay
-        loop repos mnewEtag
+        innerLoop repos mnewEtag
   let outerLoop = do
         catchAnyDeep
-          (withRepositories reposInfo $ \repos -> loop repos Nothing)
+          (withRepositories reposInfo $ \repos -> innerLoop repos Nothing)
           (\e -> do
              hPutStrLn stderr $
                "ERROR: Received an unexpected exception while updating repositories: " ++
