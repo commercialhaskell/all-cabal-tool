@@ -117,12 +117,6 @@ repoWriteGitFile GitRepository {repoInstance = GitInstance {..}} fp f = do
             Nothing -> return $ insertGitFile workTree treePath f
 
 
-
---repoDeleteFile :: GitRepository -> FilePath -> IO ()
---repoDeleteFile = undefined
-
-
-
 repoCreateCommit :: GitRepository -> ByteString -> IO (Maybe Ref)
 repoCreateCommit repo@GitRepository {repoInstance = GitInstance {..}
                                     ,repoInfo = GitInfo {..}} msg = do
@@ -142,12 +136,6 @@ repoCreateCommit repo@GitRepository {repoInstance = GitInstance {..}
         return (commitRef, Just commitRef)
 
 
-
---repoReadCommit :: GitRepository -> String -> IO GitCommit
---repoReadCommit = undefined
-
-
-
 repoCreateTag :: GitRepository -> Ref -> ByteString -> IO (Maybe Ref)
 repoCreateTag repo@GitRepository {repoInstance = GitInstance {..}
                                  ,repoInfo = GitInfo {gitTagName = Just tagName
@@ -157,7 +145,9 @@ repoCreateTag repo@GitRepository {repoInstance = GitInstance {..}
     case userGpgKey gitUser of
       Just key -> signTag gitRepo key tag
       Nothing -> return tag
-  Just <$> repoWriteObject repo (Tag newTag)
+  ref <- repoWriteObject repo (Tag newTag)
+  writeFile (gitLocalPath </> "refs" </> "tags" </> S8.unpack (G.tagBlob newTag)) (show ref)
+  return $ Just ref
 repoCreateTag _ _ _ = return Nothing
 
 
@@ -193,7 +183,7 @@ ensureRepository repoHost repoAccount gitUser repoName repoBranchName repoBasePa
            ]
   --run repoLocalPath "git" ["config", "user.name", userName gitUser]
   --run repoLocalPath "git" ["config", "user.email", userEmail gitUser]
-  run repoLocalPath "git" ["config", "core.autocrlf", "input"]
+  --run repoLocalPath "git" ["config", "core.autocrlf", "input"]
   return
     GitInfo
     { gitAddress = repoAddress

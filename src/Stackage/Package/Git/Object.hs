@@ -114,30 +114,6 @@ unDigestRef :: Digest SHA1 -> Ref
 unDigestRef = fromBinary . convert
 
 
-{-
-
-  (zipped, sha1 :: Digest SHA1) <-
-    runConduit $
-    (sourceLazy content) =$=
-    getZipSink
-      ((,) <$> ZipSink (compress 1 defaultWindowBits =$= foldC) <*> ZipSink sinkHash)
-marshallObject (Blob (GitFile {..})) = do
-  let contentSrc = 
-  (zipped <-
-    runConduit $
-    (sourceLazy content) =$=
-    getZipSink
-      ((,) <$> ZipSink (compress 1 defaultWindowBits =$= foldC) <*> ZipSink sinkHash)
-  return $
-    GitFile
-    { gitFileRef = fromHexString $ show sha1
-    , gitFilePath = fp
-    , gitFileType = RegularFile NonExecFile
-    , gitFileContent = lbs
-    , gitFileZipped = L.fromStrict zipped
-    }
--}
-
 repoWriteObject :: GitRepository -> GitObject -> IO Ref
 repoWriteObject GitRepository {repoInstance = GitInstance {..}
                               ,repoInfo = GitInfo {..}} obj = do
