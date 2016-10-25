@@ -44,7 +44,8 @@ saveDeprecated repos = do
 -- | Saves '.cabal' files together with 'preferred-version', but ignores
 -- 'package.json'
 entryUpdateFile
-  :: MonadIO m => GitRepository -> IndexEntry -> m ()
+  :: MonadIO m
+  => GitRepository -> IndexEntry -> m ()
 entryUpdateFile allCabalRepo (CabalEntry IndexFile {..}) = do
   liftIO $ repoWriteGitFile allCabalRepo ifPath (cabalGitFile ifFile)
 entryUpdateFile allCabalRepo (VersionsEntry IndexFile {..}) = do
@@ -55,8 +56,8 @@ entryUpdateFile _ _ = return ()
 -- | Main `Sink` that uses entries from the 00-index.tar.gz file to update all
 -- relevant files in all three repos.
 allCabalUpdate
-  :: (MonadIO m, MonadMask m, PrimMonad base, MonadBase base m) =>
-     Repositories -> Sink Tar.Entry m ()
+  :: (MonadIO m, MonadMask m, PrimMonad base, MonadBase base m)
+  => Repositories -> Sink Tar.Entry m ()
 allCabalUpdate Repositories {..} = do
   liftIO $
     saveDeprecated
@@ -68,7 +69,7 @@ allCabalUpdate Repositories {..} = do
     (getZipSink
        (ZipSink
           (CL.iterM (entryUpdateFile allCabalFiles) =$=
-           CL.iterM (entryUpdateFile allCabalHashes) =$=
-           CL.mapM_ (entryUpdateHashes allCabalHashes)) *>
+           CL.mapM_ (entryUpdateFile allCabalHashes)) *>
+        ZipSink (CL.mapM_ (entryUpdateHashes allCabalHashes)) *>
         ZipSink sinkPackageVersions))
-  liftIO $ updateMetadata allCabalMetadata allCabalFiles packageVersions
+  updateMetadata allCabalMetadata allCabalFiles packageVersions

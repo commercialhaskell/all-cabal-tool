@@ -37,50 +37,58 @@ withRepository info@GitInfo {..} action = do
            "Cannot resolve " ++ gitBranchName ++ " for repository: " ++ gitLocalPath)
           id <$>
         resolveRevision git (fromString gitBranchName)
-      rootTreeRef <-
-        maybe
-          (error $
-           "Cannot resolve root tree for " ++
-           gitBranchName ++ " for repository: " ++ gitLocalPath)
-          id <$>
-        resolvePath git branchRef []
       headSet git (Right (RefName gitBranchName))
-      rootTree <- readWorkTree git rootTreeRef
       branchRefMVar <- newMVar branchRef
-      rootTreeMVar <- newMVar rootTree
-      workTreeMVar <- newMVar emptyWorkTree
+      workTreeMVar <- newEmptyMVar
       action
         GitRepository
         { repoInstance =
           GitInstance
           { gitRepo = git
           , gitBranchRef = branchRefMVar
-          , gitRootTree = rootTreeMVar
           , gitWorkTree = workTreeMVar
           }
         , repoInfo = info
         }
 
 
+ensureWorkTree :: GitRepository -> IO ()
+ensureWorkTree GitRepository {repoInstance = GitInstance {..}
+                             ,repoInfo = GitInfo {..}} = do
+  workTreeEmpty <- isEmptyMVar gitWorkTree
+  when workTreeEmpty $
+    withMVar gitBranchRef $
+    \branchRef -> do
+      rootTreeRef <-
+        maybe
+          (error $
+           "Cannot resolve root tree for " ++
+           gitBranchName ++ " for repository: " ++ gitLocalPath)
+          id <$>
+        resolvePath gitRepo branchRef []
+      rootTree <- readWorkTree gitRepo rootTreeRef
+      putMVar gitWorkTree (rootTree, emptyWorkTree)
+  
+
 
 repoReadFile :: GitRepository -> FilePath -> IO (Maybe LByteString)
-repoReadFile GitRepository {repoInstance = GitInstance {..}} fp = do
-  workTree <- readMVar gitWorkTree
-  let treePath = toTreePath fp
-  case lookupFile workTree treePath of
-    Just f -> do
-      let (G.ObjBlob (G.Blob blob)) =
-            looseUnmarshallZipped $ Zipped $ L.fromStrict $ gitFileZipped f
-      return $ Just blob
-    Nothing -> do
-      rootTree <- readMVar gitRootTree
-      case lookupFile rootTree treePath of
-        Just ref -> do
-          mobj <- getObject gitRepo ref True
-          case mobj of
-            Just (G.ObjBlob (G.Blob blob)) -> return $ Just blob
-            _ -> return Nothing
-        Nothing -> return Nothing
+repoReadFile repo@GitRepository {repoInstance = GitInstance {..}} fp = do
+  ensureWorkTree repo
+  withMVar gitWorkTree $ \ (rootTree, workTree) -> do
+    let treePath = toTreePath fp
+    case lookupFile workTree treePath of
+      Just f -> do
+        let (G.ObjBlob (G.Blob blob)) =
+              looseUnmarshallZipped $ Zipped $ L.fromStrict $ gitFileZipped f
+        return $ Just blob
+      Nothing -> do
+        case lookupFile rootTree treePath of
+          Just ref -> do
+            mobj <- getObject gitRepo ref True
+            case mobj of
+              Just (G.ObjBlob (G.Blob blob)) -> return $ Just blob
+              _ -> return Nothing
+          Nothing -> return Nothing
 
 
 -- | Same as `readRepoFile`, but will raise an error if file cannot be found.
@@ -97,29 +105,31 @@ repoReadFile' repo@GitRepository {repoInfo = GitInfo {..}} fp = do
 
 
 repoWriteFile :: GitRepository -> FilePath -> LByteString -> IO ()
-repoWriteFile repo fp f = makeGitFile f (fromIntegral $ length f) >>= repoWriteGitFile repo fp
+repoWriteFile repo fp f =
+  makeGitFile f (fromIntegral $ length f) >>= repoWriteGitFile repo fp
 
 
 
 repoWriteGitFile :: GitRepository -> FilePath -> GitFile -> IO ()
-repoWriteGitFile GitRepository {repoInstance = GitInstance {..}} fp f = do
+repoWriteGitFile repo@GitRepository {repoInstance = GitInstance {..}} fp f = do
+  ensureWorkTree repo
   let treePath = toTreePath fp
-  withMVar gitRootTree $
-    \rootTree ->
-       modifyMVar_ gitWorkTree $
-       \workTree ->
-          case lookupFile rootTree treePath of
-            Just ref ->
-              return $
-              if ref == gitFileRef f
-                then removeGitFile workTree treePath
-                else insertGitFile workTree treePath f
-            Nothing -> return $ insertGitFile workTree treePath f
+  modifyMVar_ gitWorkTree $
+    \(rootTree, workTree) -> do
+       newWorkTree <- case lookupFile rootTree treePath of
+         Just ref ->
+           return $
+           if ref == gitFileRef f
+             then removeGitFile workTree treePath
+             else insertGitFile workTree treePath f
+         Nothing -> return $ insertGitFile workTree treePath f
+       return (rootTree, newWorkTree)
 
 
 repoCreateCommit :: GitRepository -> ByteString -> IO (Maybe Ref)
 repoCreateCommit repo@GitRepository {repoInstance = GitInstance {..}
                                     ,repoInfo = GitInfo {..}} msg = do
+  ensureWorkTree repo
   mtreeRef <- flushWorkTree repo
   case mtreeRef of
     Nothing -> do
@@ -181,9 +191,6 @@ ensureRepository repoHost repoAccount gitUser repoName repoBranchName repoBasePa
            , "--branch"
            , repoBranchName             
            ]
-  --run repoLocalPath "git" ["config", "user.name", userName gitUser]
-  --run repoLocalPath "git" ["config", "user.email", userEmail gitUser]
-  --run repoLocalPath "git" ["config", "core.autocrlf", "input"]
   return
     GitInfo
     { gitAddress = repoAddress
