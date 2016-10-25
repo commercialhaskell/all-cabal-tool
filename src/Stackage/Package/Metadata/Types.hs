@@ -46,16 +46,12 @@ import Stackage.Package.Hashes (unDigest)
 data PackageInfo = PackageInfo
   { piLatest :: !Version
   , piHash :: !Text
-    -- Below comes from preferred versions.
   , piAllVersions :: !(Set Version)
-    -- ^
   , piSynopsis :: !Text
-    -- Below comes from 'sdist.tar.gz'
   , piDescription :: !Text
   , piDescriptionType :: !Text
   , piChangeLog :: !Text
   , piChangeLogType :: !Text
-    -- ^
   , piBasicDeps :: !(Map PackageName VersionRange)
   , piTestBenchDeps :: !(Map PackageName VersionRange)
   , piAuthor :: !Text
@@ -128,7 +124,7 @@ instance FromJSON Deprecation where
 
 
 data CabalFile = CabalFile
-  { cfPackage :: !PackageIdentifier
+  { cfPackage :: PackageIdentifier
   , cfHash :: !Text
   , cfSynopsis :: Text
   , cfBasicDeps :: Map PackageName VersionRange

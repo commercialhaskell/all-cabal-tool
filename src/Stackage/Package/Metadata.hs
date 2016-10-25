@@ -96,22 +96,15 @@ updateMetadata metadataRepo cabalFilesRepo packageVersions =
              renderDistText packageName ++
              ". Using all available versions for metadata."
            let cabalFileName = getCabalFilePath packageName packageVersionMax
-               cabalPackageId = PackageIdentifier packageName packageVersionMax
            cabalFile <- parseCabalFile <$> repoReadFile' cabalFilesRepo cabalFileName
-           when (cabalPackageId /= cfPackage cabalFile) $
-             error $
-             "Stackage.Package.Metadata.updateMetadata: Parsed cabal file: " ++
-             cabalFileName ++
-             " package identifier mismatch: " ++
-             show cabalPackageId ++ " /= " ++ (show $ cfPackage cabalFile)
-           return (cabalFile, preferredVersionSetNonEmpty)
+           return (cabalFile, packageName, preferredVersionSetNonEmpty)
      CL.unfold fromVersions packageVersions =$= CL.mapM readCabalFile $$
        CL.mapM_ (updatePackageIfChanged metadataRepo)
 
 updatePackageIfChanged
   :: MonadIO m
-  => GitRepository -> (CabalFile, Set Version) -> m ()
-updatePackageIfChanged metadataRepo (cabalFile@CabalFile {..}, versionSet) =
+  => GitRepository -> (CabalFile, PackageName, Set Version) -> m ()
+updatePackageIfChanged metadataRepo (cabalFile@CabalFile {..}, packageName, versionSet) =
   liftIO $
   do mepi <- fmap (Y.decodeEither . L.toStrict) <$> repoReadFile metadataRepo fp
      case mepi of
@@ -121,7 +114,8 @@ updatePackageIfChanged metadataRepo (cabalFile@CabalFile {..}, versionSet) =
        Just (Right pi)
        -- Current version hasn't changed, hence data in the sdist.tar.gz is still
        -- the same, updating cabal related info only.
-         | pkgVersionMax == piLatest pi ->
+         | pkgVersionMax == piLatest pi -> do
+           checkCabalFile
            repoWriteFile
              metadataRepo
              fp
@@ -136,9 +130,18 @@ updatePackageIfChanged metadataRepo (cabalFile@CabalFile {..}, versionSet) =
        -- Version update or a totally new package.
        _ -> updatePackage
   where
-    pkgNameStr = renderDistText $ pkgName cfPackage
+    pkgNameStr = renderDistText packageName
     pkgVersionStr = renderDistText pkgVersionMax
-    pkgVersionMax = pkgVersion cfPackage
+    pkgVersionMax = Set.findMax versionSet
+    checkCabalFile = do
+      let cabalPackageId = PackageIdentifier packageName pkgVersionMax
+      let cabalFileName = getCabalFilePath packageName pkgVersionMax
+      when (cabalPackageId /= cfPackage) $
+        error $
+        "Stackage.Package.Metadata.updateMetadata: Parsed cabal file: " ++
+        cabalFileName ++
+        " package identifier mismatch: " ++
+        show cabalPackageId ++ " /= " ++ (show cfPackage)
     url =
       concat
         [ mirrorFPComplete
@@ -153,6 +156,7 @@ updatePackageIfChanged metadataRepo (cabalFile@CabalFile {..}, versionSet) =
       | otherwise =
         fmap Just $ (CL.fold goEntry (cfDescription, "haddock", "", ""))
     updatePackage = do
+      checkCabalFile
       sdistReq <- parseRequest url
       result <- httpTarballSink sdistReq True sink
       case result of

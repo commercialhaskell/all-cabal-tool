@@ -42,8 +42,7 @@ data GitInstance = GitInstance
     -- ^ Git repository instance.
   , gitBranchRef :: MVar G.Ref
     -- ^ Reference of the commit, that current branch is pointing to.
-  , gitRootTree :: MVar (WorkTree G.Ref G.Ref)
-  , gitWorkTree :: MVar (WorkTree () GitFile)
+  , gitWorkTree :: MVar (WorkTree G.Ref G.Ref, WorkTree () GitFile)
     -- ^ Current work tree written to the git store.
   }
 

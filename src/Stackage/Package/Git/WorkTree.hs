@@ -123,15 +123,13 @@ diveTreePersist repo (Directory _ dirMap) = do
 flushWorkTree :: GitRepository -> IO (Maybe Ref)
 flushWorkTree repo@GitRepository {repoInstance = GitInstance {..}} = do
   modifyMVar gitWorkTree $
-    \workTree -> do
-      mnewRootRef <-
-        modifyMVar gitRootTree $
-        \rootTree -> do
-          newRootTree <- flushWorkTreeRec rootTree workTree
-          if getTreeRef newRootTree == getTreeRef rootTree
-            then return (newRootTree, Nothing)
-            else return (newRootTree, Just $ getTreeRef newRootTree)
-      return (emptyWorkTree, mnewRootRef)
+    \(rootTree, workTree) -> do
+      newRootTree <- flushWorkTreeRec rootTree workTree
+      let mnewRootRef =
+            if getTreeRef newRootTree == getTreeRef rootTree
+              then Nothing
+              else Just $ getTreeRef newRootTree
+      return ((rootTree, emptyWorkTree), mnewRootRef)
   where
     flushWorkTreeRec (File ref _) file@(File f t2)
       | ref == gitFileRef f = return $ File ref t2
@@ -141,7 +139,6 @@ flushWorkTree repo@GitRepository {repoInstance = GitInstance {..}} = do
     flushWorkTreeRec (File {}) d2@(Directory _ _) = do
       diveTreePersist repo d2
     flushWorkTreeRec d1@(Directory _ dirMap1) (Directory _ dirMap2)
-                                              {- Empty folder: unchanged -}
       | Map.null dirMap2 = return d1
       | otherwise = do
         let unchangedMap = Map.difference dirMap1 dirMap2

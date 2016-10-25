@@ -79,8 +79,6 @@ makeGitTag commitRef gitUser tagStr tagMessage = do
     }
 
 
--- TODO: Switch to conduit ref calculation and compression.
-
 
 marshallObject :: GitObject -> (Ref, LByteString)
 marshallObject (Blob f) = (gitFileRef f, L.fromStrict $ gitFileZipped f)
