@@ -129,7 +129,7 @@ flushWorkTree repo@GitRepository {repoInstance = GitInstance {..}} = do
             if getTreeRef newRootTree == getTreeRef rootTree
               then Nothing
               else Just $ getTreeRef newRootTree
-      return ((rootTree, emptyWorkTree), mnewRootRef)
+      return ((newRootTree, emptyWorkTree), mnewRootRef)
   where
     flushWorkTreeRec (File ref _) file@(File f t2)
       | ref == gitFileRef f = return $ File ref t2
