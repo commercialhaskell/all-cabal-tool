@@ -1,3 +1,4 @@
+{-# LANGUAGE RankNTypes #-}
 {-# LANGUAGE NoImplicitPrelude #-}
 {-# LANGUAGE OverloadedStrings #-}
 {-# LANGUAGE RecordWildCards #-}
@@ -268,19 +269,34 @@ runPipe
   -> [String] -- ^ Arguments
   -> LByteString -- ^ @stdin@
   -> IO (LByteString, LByteString)
-runPipe dir cmd args input = do
-  putStrLn $ concatMap pack ["Running in ", dir, ": ", showCommandForUser cmd args]
+runPipe dir cmd args input =
+  runPipeWithConduit dir cmd args (sourceLazy input) sinkLazyBuilder sinkLazyBuilder
+
+
+-- | Run an external process, pipes @stdin@ to it and returns @(stdout,
+-- stderr)@. Throws an error if process exited abnormally.
+runPipeWithConduit
+  :: FilePath -- ^ Filepath where process will run.
+  -> FilePath -- ^ Path to executable
+  -> [String] -- ^ Arguments
+  -> Producer IO ByteString
+  -> Consumer ByteString IO a
+  -> Consumer ByteString IO b
+  -> IO (a, b)
+runPipeWithConduit dir cmd args inputSrc stdoutSink stderrSink = do
+  putStrLn $
+    concatMap pack ["Running in ", dir, ": ", showCommandForUser cmd args]
   (exitCode, out, err) <-
     sourceProcessWithStreams
       (proc cmd args)
       { cwd = Just dir
       }
-      (sourceLazy input)
-      sinkLazyBuilder
-      sinkLazyBuilder
+      inputSrc
+      stdoutSink
+      stderrSink
   case exitCode of
     ExitSuccess -> return (out, err)
     code ->
       error $
-      "Stackage.Package.Location.runPipe: " ++
+      "Stackage.Package.Location.runPipeWithConduit: " ++
       showCommandForUser cmd args ++ " produced an error: " ++ show code
