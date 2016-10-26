@@ -1,15 +1,22 @@
+{-# LANGUAGE BangPatterns #-}
 {-# LANGUAGE FlexibleInstances #-}
 {-# LANGUAGE RecordWildCards #-}
 {-# LANGUAGE NoImplicitPrelude #-}
+{-# LANGUAGE ViewPatterns #-}
 module Stackage.Package.Git.Types where
 
 import ClassyPrelude.Conduit
+import qualified Data.ByteString.Builder as B
+import qualified Data.ByteString.Builder.Extra as BE
 import qualified Data.ByteString.Char8 as S8
-import Data.Bits
+import qualified Data.ByteString.Short as BS
+import qualified Data.ByteString.Lazy as L
+import qualified Data.ByteString.Unsafe as BU
 import Data.Git.Ref
 import qualified Data.Map as Map
 import Data.Word (Word32)
 import Data.Hourglass (timeFromElapsed)
+import Foreign.Storable (peekByteOff)
 import Time.System (timeCurrent)
 
 import qualified Data.Git as G
@@ -33,6 +40,7 @@ data GitInfo = GitInfo
   , gitTagName :: Maybe ByteString
     -- ^ Create a tag after an update.
   , gitLocalPath :: FilePath
+  , gitRootTree :: Maybe (WorkTree ShortRef ShortRef)
   }
 
 
@@ -42,7 +50,7 @@ data GitInstance = GitInstance
     -- ^ Git repository instance.
   , gitBranchRef :: MVar G.Ref
     -- ^ Reference of the commit, that current branch is pointing to.
-  , gitWorkTree :: MVar (WorkTree G.Ref G.Ref, WorkTree () GitFile)
+  , gitWorkTree :: MVar (WorkTree ShortRef ShortRef, WorkTree () GitFile)
     -- ^ Current work tree written to the git store.
   }
 
@@ -69,8 +77,8 @@ type GitTag = G.Tag
 
 
 data FileName
-  = FileName !ByteString
-  | DirectoryName !ByteString
+  = FileName !BS.ShortByteString
+  | DirectoryName !BS.ShortByteString
   deriving (Show)
 
 
@@ -83,16 +91,16 @@ toTreePath path = foldr toFileName [] splitPath'
     toFileName fName []
       | null fName =
         error $ "Tree path should end with a file name, not a directory: " ++ path
-      | otherwise = [FileName fName]
-    toFileName fDir tp = DirectoryName (S8.snoc fDir '/') : tp
+      | otherwise = [FileName $ BS.toShort fName]
+    toFileName fDir tp = DirectoryName (BS.toShort $ S8.snoc fDir '/') : tp
 
 
 
 
 instance Eq FileName where
   (==) (FileName f1) (FileName f2) = f1 == f2
-  (==) (FileName f) (DirectoryName d) = f == S8.init d
-  (==) (DirectoryName d) (FileName f) = S8.init d == f
+  (==) (FileName f) (DirectoryName d) = BS.fromShort f == S8.init (BS.fromShort d)
+  (==) (DirectoryName d) (FileName f) = S8.init (BS.fromShort d) == BS.fromShort f
   (==) (DirectoryName d1) (DirectoryName d2) = d1 == d2
 
 
@@ -107,7 +115,29 @@ instance Ord FileName where
   compare (DirectoryName d1) (DirectoryName d2) = compare d1 d2
 
 
-data UnixPerm
+data ShortRef =
+  ShortRef !Word64
+           !Word64
+           !Word32
+  deriving (Eq, Ord)
+
+toShortRef :: MonadIO m => Ref -> m ShortRef
+toShortRef !(toBinary -> bs)
+    | length bs /= 20 = error "Stackage.Package.Git.Types.toShortRef: length is not 20"
+    | otherwise = liftIO $ BU.unsafeUseAsCString bs $ \ptr -> ShortRef
+        <$> peekByteOff ptr 0
+        <*> peekByteOff ptr 8
+        <*> peekByteOff ptr 16
+
+
+fromShortRef :: ShortRef -> Ref
+fromShortRef !(ShortRef w64 w64' w32) =
+  fromBinary $
+  L.toStrict $
+  B.toLazyByteString
+    (BE.word64Host w64 <> BE.word64Host w64' <> BE.word32Host w32)
+
+data FileType
   = ExecFile
     -- ^ Executable - @0o755@
   | NonExecFile
@@ -115,15 +145,12 @@ data UnixPerm
   | NonExecGroupFile
     -- ^ Grandfathered mode - @0o664@ - @git fsck@ allows this permissions:
     -- <https://github.com/git/git/blob/8354fa3d4ca50850760ceee9054e3e7a799a4d62/fsck.c#L583>
-  deriving (Eq, Show)
-
-
-data FileType
-  = RegularFile !UnixPerm
   | SymLink
+    -- ^ Symbolic link
   | GitLink
+    -- ^ Git link, used for modules.
   deriving (Eq, Show)
-  
+
 
 data WorkTree d f
   = File !f !FileType
@@ -131,7 +158,7 @@ data WorkTree d f
   deriving (Show)
 
 
-instance Eq (WorkTree Ref Ref) where
+instance Eq (WorkTree ShortRef ShortRef) where
   (File ref1 t1) == (File ref2 t2) = ref1 == ref2 && t1 == t2
   (Directory ref1 _) == (Directory ref2 _) = ref1 == ref2
   _ == _ = False
@@ -149,9 +176,7 @@ getPerson GitUser {..} = do
     }
 
 
-
-
-getTreeRef :: WorkTree G.Ref G.Ref -> G.Ref
+getTreeRef :: WorkTree ShortRef ShortRef -> ShortRef
 getTreeRef (Directory ref _) = ref
 getTreeRef (File ref _) = ref
 
@@ -160,18 +185,6 @@ getTreeMode :: WorkTree d f -> G.ModePerm
 getTreeMode Directory {}     = G.ModePerm 0o040000
 getTreeMode (File _ GitLink) = G.ModePerm 0o160000
 getTreeMode (File _ SymLink) = G.ModePerm 0o120000
-getTreeMode (File _ (RegularFile perm)) = G.ModePerm (0o100000 .|. fromUnixPerm perm)
-
-
-fromUnixPerm :: UnixPerm -> Word32
-fromUnixPerm ExecFile = 0o755
-fromUnixPerm NonExecFile = 0o644
-fromUnixPerm NonExecGroupFile = 0o664
-
-
-toUnixPerm :: Word32 -> UnixPerm
-toUnixPerm perm = case (perm .&. 0o777) of
-  0o755 -> ExecFile
-  0o644 -> NonExecFile
-  0o664 -> NonExecGroupFile
-  p -> error $ "Unrecognized file permission: " ++ show p
+getTreeMode (File _ ExecFile) = G.ModePerm 0o100755
+getTreeMode (File _ NonExecFile) = G.ModePerm 0o100644
+getTreeMode (File _ NonExecGroupFile) = G.ModePerm 0o100664

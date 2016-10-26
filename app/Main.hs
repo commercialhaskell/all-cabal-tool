@@ -206,11 +206,11 @@ main = do
     putStrLn
       "WARNING: No s3-bucket is provided. Uploading of 00-index.tar.gz will be disabled."
   indexReq <- parseRequest $ mirrorFPComplete ++ "/01-index.tar.gz"
-  reposInfo <- getReposInfo localPath gitAccount gitUser
-  let innerLoop mlastEtag = do
+  reposInfoInit <- getReposInfo localPath gitAccount gitUser
+  let innerLoop reposInfo mlastEtag = do
         putStrLn $ "Checking index, etag == " ++ tshow mlastEtag
         commitMessage <- getCommitMessage
-        mnewEtag <- withRepositories reposInfo $ \ repos -> do
+        (newInfo, mnewEtag) <- withRepositories reposInfo $ \ repos -> do
           (updated, mnewEtag) <- (processIndexUpdate repos indexReq mlastEtag)
           when updated $
             do pushRepos repos commitMessage
@@ -220,10 +220,11 @@ main = do
                  _ -> return ()
           return mnewEtag
         threadDelay delay
-        innerLoop mnewEtag
+        innerLoop newInfo mnewEtag
+        --return ()
   let outerLoop = do
         catchAnyDeep
-          (innerLoop Nothing)
+          (innerLoop reposInfoInit Nothing)
           (\e -> do
              hPutStrLn stderr $
                "ERROR: Received an unexpected exception while updating repositories: " ++

@@ -43,7 +43,7 @@ makeGitFile lbs sz = do
   return $
     GitFile
     { gitFileRef = unDigestRef sha1
-    , gitFileType = RegularFile NonExecFile
+    , gitFileType = NonExecFile
     , gitFileZipped = zipped
     }
 

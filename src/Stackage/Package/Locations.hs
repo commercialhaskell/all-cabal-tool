@@ -22,9 +22,9 @@ data Repositories = Repositories
 
 withRepositories :: (GitInfo, GitInfo, GitInfo)
                  -> (Repositories -> IO a)
-                 -> IO a
+                 -> IO ((GitInfo, GitInfo, GitInfo), a)
 withRepositories (filesInfo, hashesInfo, metadataInfo) action = do
-  withRepository
+  (i1, (i2, (i3, res))) <- withRepository
     filesInfo
     (\filesRepo ->
         withRepository
@@ -34,3 +34,4 @@ withRepositories (filesInfo, hashesInfo, metadataInfo) action = do
                 metadataInfo
                 (\metadataRepo -> do
                    action $ Repositories filesRepo hashesRepo metadataRepo)))
+  return ((i1, i2, i3), res)
