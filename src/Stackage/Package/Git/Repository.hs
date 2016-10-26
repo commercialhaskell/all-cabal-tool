@@ -26,7 +26,7 @@ import Stackage.Package.Git.Types
 import Stackage.Package.Git.Object
 import Stackage.Package.Git.WorkTree
 
-withRepository :: GitInfo -> (GitRepository -> IO a) -> IO a
+withRepository :: GitInfo -> (GitRepository -> IO a) -> IO (GitInfo, a)
 withRepository info@GitInfo {..} action = do
   properRepo <- isRepo (P.decodeString gitLocalPath)
   unless properRepo $ error $ "There is no git repository in :" ++ gitLocalPath
@@ -41,16 +41,31 @@ withRepository info@GitInfo {..} action = do
       headSet git (Right (RefName gitBranchName))
       branchRefMVar <- newMVar branchRef
       workTreeMVar <- newEmptyMVar
-      action
-        GitRepository
-        { repoInstance =
-          GitInstance
-          { gitRepo = git
-          , gitBranchRef = branchRefMVar
-          , gitWorkTree = workTreeMVar
+      case gitRootTree of
+        Just rootTree -> putMVar workTreeMVar (rootTree, emptyWorkTree)
+        Nothing -> return ()
+      res <-
+        action
+          GitRepository
+          { repoInstance =
+            GitInstance
+            { gitRepo = git
+            , gitBranchRef = branchRefMVar
+            , gitWorkTree = workTreeMVar
+            }
+          , repoInfo = info
           }
-        , repoInfo = info
-        }
+      newInfo <-
+        do workTreeEmpty <- isEmptyMVar workTreeMVar
+           if workTreeEmpty
+             then return info
+             else withMVar workTreeMVar $
+                  \(rootTree, _) ->
+                     return $
+                     info
+                     { gitRootTree = Just rootTree
+                     }
+      return (newInfo, res)
 
 
 ensureWorkTree :: GitRepository -> IO ()
@@ -84,8 +99,8 @@ repoReadFile repo@GitRepository {repoInstance = GitInstance {..}} fp = do
         return $ Just blob
       Nothing -> do
         case lookupFile rootTree treePath of
-          Just ref -> do
-            mobj <- getObject gitRepo ref True
+          Just sRef -> do
+            mobj <- getObject gitRepo (fromShortRef sRef) True
             case mobj of
               Just (G.ObjBlob (G.Blob blob)) -> return $ Just blob
               _ -> return Nothing
@@ -117,14 +132,16 @@ repoWriteGitFile repo@GitRepository {repoInstance = GitInstance {..}} fp f = do
   let treePath = toTreePath fp
   modifyMVar_ gitWorkTree $
     \(rootTree, workTree) -> do
-       newWorkTree <- case lookupFile rootTree treePath of
-         Just ref ->
-           return $
-           if ref == gitFileRef f
-             then removeGitFile workTree treePath
-             else insertGitFile workTree treePath f
-         Nothing -> return $ insertGitFile workTree treePath f
-       return (rootTree, newWorkTree)
+      newWorkTree <-
+        case lookupFile rootTree treePath of
+          Just sRef -> do
+            sRef' <- toShortRef $ gitFileRef f
+            return $
+              if sRef == sRef'
+                then removeGitFile workTree treePath
+                else insertGitFile workTree treePath f
+          Nothing -> return $ insertGitFile workTree treePath f
+      return (rootTree, newWorkTree)
 
 
 repoCreateCommit :: GitRepository -> ByteString -> IO (Maybe Ref)
@@ -199,6 +216,7 @@ ensureRepository repoHost repoAccount gitUser repoName repoBranchName repoBasePa
     , gitUser = gitUser
     , gitTagName = Nothing
     , gitLocalPath = repoLocalPath
+    , gitRootTree = Nothing
     }
   where
     repoLocalPath = repoBasePath </> repoName

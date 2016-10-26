@@ -8,6 +8,7 @@ import ClassyPrelude.Conduit
 import Control.Monad
 import Data.Bits
 import qualified Data.ByteString as S
+import qualified Data.ByteString.Short as BS
 import qualified Data.ByteString.Char8 as S8
 import Data.Byteable
 import qualified Data.Git as G
@@ -19,14 +20,12 @@ import Stackage.Package.Git.Types
 import Stackage.Package.Git.Object
 
 
-directoryToTree :: Map.Map FileName (WorkTree Ref Ref) -> G.Tree
-directoryToTree dirMap =
-  G.Tree
-    [ (getTreeMode t, toEntName name, getTreeRef t)
-    | (name, t) <- Map.toAscList dirMap ]
+directoryToTree :: Map.Map FileName (WorkTree ShortRef ShortRef) -> G.Tree
+directoryToTree dirMap = G.Tree $ map toEnt' (Map.toAscList dirMap)
   where
-    toEntName (FileName fName) = G.entName fName
-    toEntName (DirectoryName dirName) = G.entName $ S.init dirName
+    toEnt' (name, t) = (getTreeMode t, toEntName name, fromShortRef $ getTreeRef t)
+    toEntName (FileName fName) = G.entName $ BS.fromShort fName
+    toEntName (DirectoryName dirName) = G.entName $ S.init $ BS.fromShort dirName
 
 
 emptyWorkTree :: WorkTree () GitFile
@@ -80,39 +79,52 @@ removeGitFile tree path = removeRec tree path
     removeRec f@(File {}) _ = f
 
 
-readWorkTree :: Git -> Ref -> IO (WorkTree Ref Ref)
+readWorkTree :: Git -> Ref -> IO (WorkTree ShortRef ShortRef)
 readWorkTree repo rootRef = readTreeRec rootRef
   where
     readTreeFile (G.ModePerm mode, ent, ref)
-      | mode == 0o120000 = return (FileName $ toBytes ent, File ref SymLink)
-      | mode == 0o160000 = return (FileName $ toBytes ent, File ref GitLink)
-      | (mode .&. 0o777000) == 0o100000 =
-        return
-          (FileName $ toBytes ent, File ref (RegularFile (toUnixPerm mode)))
+      | mode == 0o120000 = do
+        sRef <- toShortRef ref
+        return (FileName $ BS.toShort $ toBytes ent, File sRef SymLink)
+      | mode == 0o160000 = do
+        sRef <- toShortRef ref
+        return (FileName $ BS.toShort $ toBytes ent, File sRef GitLink)
+      | (mode .&. 0o777000) == 0o100000 = do
+        let fileType =
+              case mode .&. 0o777 of
+                0o755 -> ExecFile
+                0o644 -> NonExecFile
+                0o664 -> NonExecGroupFile
+                _ -> error $ "Unrecognized file type: " ++ show mode
+        sRef <- toShortRef ref
+        return (FileName $ BS.toShort $ toBytes ent, File sRef fileType)
       | mode == 0o040000 = do
         directory <- readTreeRec ref
-        return (DirectoryName $ S8.snoc (toBytes ent) '/', directory)
+        return
+          (DirectoryName $ BS.toShort $ S8.snoc (toBytes ent) '/', directory)
       | otherwise = error $ "Unsupported file mode: " ++ show mode
     readTreeRec ref = do
       G.Tree tree <- G.getTree repo ref
       files <- mapM readTreeFile tree
-      return $ Directory ref $ Map.fromAscList files
+      sRef <- toShortRef ref
+      return $ Directory sRef $ Map.fromAscList files
 
 
 persistGitTree
   :: GitRepository
-  -> Map.Map FileName (WorkTree G.Ref G.Ref)
-  -> IO (WorkTree Ref Ref)
+  -> Map.Map FileName (WorkTree ShortRef ShortRef)
+  -> IO (WorkTree ShortRef ShortRef)
 persistGitTree repo dirMap = do
-  let tree = directoryToTree dirMap
-  ref <- repoWriteObject repo (Tree tree)
-  return $ Directory ref dirMap
+  ref <- repoWriteObject repo (Tree $ directoryToTree dirMap)
+  sRef <- toShortRef ref
+  return $ Directory sRef dirMap
 
 
-diveTreePersist :: GitRepository -> WorkTree () GitFile -> IO (WorkTree Ref Ref)
+diveTreePersist :: GitRepository -> WorkTree () GitFile -> IO (WorkTree ShortRef ShortRef)
 diveTreePersist repo (File f t) = do
   ref <- repoWriteObject repo (Blob f)
-  return $ File ref t
+  sRef <- toShortRef ref
+  return $ File sRef t
 diveTreePersist repo (Directory _ dirMap) = do
   let dir = Map.toAscList dirMap
   persistedTrees <- mapM (diveTreePersist repo . snd) dir
@@ -128,12 +140,12 @@ flushWorkTree repo@GitRepository {repoInstance = GitInstance {..}} = do
       let mnewRootRef =
             if getTreeRef newRootTree == getTreeRef rootTree
               then Nothing
-              else Just $ getTreeRef newRootTree
+              else Just $ fromShortRef (getTreeRef newRootTree)
       return ((newRootTree, emptyWorkTree), mnewRootRef)
   where
-    flushWorkTreeRec (File ref _) file@(File f t2)
-      | ref == gitFileRef f = return $ File ref t2
-      | otherwise = diveTreePersist repo file
+    flushWorkTreeRec (File ref _) file@(File f t2) = do
+      sRef <- toShortRef (gitFileRef f)
+      if ref == sRef then return (File sRef t2) else diveTreePersist repo file
     flushWorkTreeRec (Directory {}) file@(File _ _) = do
       diveTreePersist repo file
     flushWorkTreeRec (File {}) d2@(Directory _ _) = do
