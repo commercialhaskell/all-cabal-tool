@@ -1,8 +1,14 @@
 {-# LANGUAGE RecordWildCards #-}
-{-# LANGUAGE DataKinds #-}
 {-# LANGUAGE NoImplicitPrelude #-}
 {-# LANGUAGE OverloadedStrings #-}
-module Stackage.Package.Git.WorkTree where
+module Stackage.Package.Git.WorkTree
+  ( emptyWorkTree
+  , readWorkTree
+  , flushWorkTree
+  , insertGitFile
+  , removeGitFile
+  , lookupFile
+  ) where
 
 import ClassyPrelude.Conduit
 import Control.Monad
@@ -20,6 +26,7 @@ import Stackage.Package.Git.Types
 import Stackage.Package.Git.Object
 
 
+-- | Conver a work tree directory into a Tree object.
 directoryToTree :: Map.Map FileName (WorkTree ShortRef ShortRef) -> G.Tree
 directoryToTree dirMap = G.Tree $ map toEnt' (Map.toAscList dirMap)
   where
@@ -28,11 +35,22 @@ directoryToTree dirMap = G.Tree $ map toEnt' (Map.toAscList dirMap)
     toEntName (DirectoryName dirName) = G.entName $ S.init $ BS.fromShort dirName
 
 
+-- | Empty work tree.
 emptyWorkTree :: WorkTree () GitFile
 emptyWorkTree = Directory () Map.empty
 
 
-
+-- | Places a file into a work tree. Here is the resolution upon a conflict of names:
+--
+-- * File name clash with either a folder or a file will effectively replace
+--   it. (e.g. inserting file @foo/bar@ will remove either a file @foo/bar@ or a
+--   directory @foo/bar/...@)
+--
+-- * Directory clash with a file will also replace that file (e.g. inserting
+--   @foo/bar/baz.txt@ will remove a file @foo/bar@)
+--
+-- * Naturally, a clash of a directory with a directory will result in their merge.
+--
 insertGitFile :: WorkTree () GitFile -> TreePath -> GitFile -> WorkTree () GitFile
 insertGitFile tree path f = insertFileRec tree path
   where
@@ -50,6 +68,7 @@ insertGitFile tree path f = insertFileRec tree path
     insertFileRec File {} treePath = insertFileRec (Directory () Map.empty) treePath
 
 
+-- | Returns a file from a work tree if one extst at a supplied path.
 lookupFile :: WorkTree a f -> TreePath -> Maybe f
 lookupFile tree path = getFile $ lookupRec tree path
   where
@@ -79,7 +98,10 @@ removeGitFile tree path = removeRec tree path
     removeRec f@(File {}) _ = f
 
 
-readWorkTree :: Git -> Ref -> IO (WorkTree ShortRef ShortRef)
+-- | Recursively reads current state of the tree.
+readWorkTree :: Git -- ^ Git Repo.
+             -> Ref -- ^ Reference for the root tree.
+             -> IO (WorkTree ShortRef ShortRef)
 readWorkTree repo rootRef = readTreeRec rootRef
   where
     readTreeFile (G.ModePerm mode, ent, ref)
@@ -110,6 +132,7 @@ readWorkTree repo rootRef = readTreeRec rootRef
       return $ Directory sRef $ Map.fromAscList files
 
 
+-- | Writes a single directory to disk.
 persistGitTree
   :: GitRepository
   -> Map.Map FileName (WorkTree ShortRef ShortRef)
@@ -120,6 +143,7 @@ persistGitTree repo dirMap = do
   return $ Directory sRef dirMap
 
 
+-- | Recursively writes a work tree to disk
 diveTreePersist :: GitRepository -> WorkTree () GitFile -> IO (WorkTree ShortRef ShortRef)
 diveTreePersist repo (File f t) = do
   ref <- repoWriteObject repo (Blob f)
@@ -132,6 +156,11 @@ diveTreePersist repo (Directory _ dirMap) = do
   persistGitTree repo persistedMap
 
 
+-- | Merges current root tree with a work tree, while writing out to disk any
+-- files that have changed, as well as a changed tree structure. At the end,
+-- changes are written to disk, current `gitWorkTree` is updated, and refernce
+-- for new root tree is returned, unless no changes were detected, then there
+-- will be no hard drive IO and `Nothing` is returned.
 flushWorkTree :: GitRepository -> IO (Maybe Ref)
 flushWorkTree repo@GitRepository {repoInstance = GitInstance {..}} = do
   modifyMVar gitWorkTree $

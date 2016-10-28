@@ -190,7 +190,7 @@ main = do
   Options {..} <- execParser (info optionsParser fullDesc)
   localPath <- maybe (getEnv "HOME") return oLocalPath
   eS3Bucket <- lookupEnv "S3_BUCKET"
-  let gitAccount = "lehins" -- "commercialhaskell"
+  let gitAccount = "commercialhaskell"
       delay = fromMaybe 60 oDelay * 1000000
       ms3Bucket = msum [oS3Bucket, (BucketName . pack) <$> eS3Bucket]
       gitUser =
@@ -221,7 +221,6 @@ main = do
           return mnewEtag
         threadDelay delay
         innerLoop newInfo mnewEtag
-        --return ()
   let outerLoop = do
         catchAnyDeep
           (innerLoop reposInfoInit Nothing)
