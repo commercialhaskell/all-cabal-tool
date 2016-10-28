@@ -1,9 +1,13 @@
 {-# LANGUAGE NoImplicitPrelude #-}
 {-# LANGUAGE OverloadedStrings #-}
-{-# LANGUAGE ScopedTypeVariables #-}
 {-# LANGUAGE RecordWildCards #-}
-{-# LANGUAGE ViewPatterns #-}
-module Stackage.Package.Git.Object where
+module Stackage.Package.Git.Object
+  ( GitObject(..)
+  , makeGitFile
+  , makeGitCommit
+  , makeGitTag
+  , repoWriteObject
+  ) where
 
 import ClassyPrelude.Conduit
 import qualified Codec.Compression.Zlib as Zlib
@@ -26,18 +30,22 @@ import System.FilePath
 import Stackage.Package.Git.Types
 
 
-
+-- | An an object that can be written to git store.
 data GitObject
   = Blob GitFile
   | Tree GitTree
   | Commit GitCommit
   | Tag GitTag
 
+
+-- | Marshalls a bytestring into a git blob object, computes it's SHA1 and
+-- compresses it and returnes a `GitFile` that is of type `NonExecFile`.
 makeGitFile
-  :: (MonadThrow m, PrimMonad base, MonadBase base m) =>
-     LByteString -> Word64 -> m GitFile
+  :: (MonadThrow m, PrimMonad base, MonadBase base m)
+  => LByteString -- ^ Content of the blob.
+  -> Word64 -- ^ Size of the content.
+  -> m GitFile
 makeGitFile lbs sz = do
-  --let content = looseMarshall (ObjBlob (G.Blob lbs))
   (sha1, zipped) <- runConduit $ srcWithHeader "blob" lbs sz
     =$= getZipSink ((,) <$> ZipSink sha1Sink <*> ZipSink compressSink)
   return $
@@ -48,8 +56,12 @@ makeGitFile lbs sz = do
     }
 
 
--- | Creates a simplified git commit.
-makeGitCommit :: Ref -> [Ref] -> GitUser -> ByteString -> IO GitCommit
+-- | Creates a git commit.
+makeGitCommit :: Ref -- ^ Root tree SHA1
+              -> [Ref] -- ^ Parent commits SHA1
+              -> GitUser -- ^ Git user
+              -> ByteString -- ^ Commit message
+              -> IO GitCommit
 makeGitCommit treeRef parents user commitMessage = do
   person <- getPerson user
   return $
@@ -66,7 +78,11 @@ makeGitCommit treeRef parents user commitMessage = do
 
 
 -- | Creates a tag of a commit.
-makeGitTag :: Ref -> GitUser -> ByteString -> ByteString -> IO GitTag
+makeGitTag :: Ref -- ^ Commit SHA1
+           -> GitUser -- ^ Git user
+           -> ByteString -- ^ Tag name
+           -> ByteString -- ^ Tag message
+           -> IO GitTag
 makeGitTag commitRef gitUser tagStr tagMessage = do
   person <- getPerson gitUser
   return $
@@ -112,6 +128,8 @@ unDigestRef :: Digest SHA1 -> Ref
 unDigestRef = fromBinary . convert
 
 
+-- | Writes an object to the disk as a loose object, unless it already exists in
+-- the git repository.
 repoWriteObject :: GitRepository -> GitObject -> IO Ref
 repoWriteObject GitRepository {repoInstance = GitInstance {..}
                               ,repoInfo = GitInfo {..}} obj = do

@@ -122,7 +122,7 @@ instance FromJSON Deprecation where
     \o -> Deprecation <$> o .: "deprecated-package" <*> o .: "in-favour-of"
 
 
-
+-- | Parsed @.cabal@ file. Only contains information needed for `PackageInfo`.
 data CabalFile = CabalFile
   { cfPackage :: PackageIdentifier
   , cfHash :: !Text
