@@ -67,9 +67,8 @@ allCabalUpdate Repositories {..} = do
   packageVersions <-
     indexFileEntryConduit =$=
     (getZipSink
-       (ZipSink
-          (CL.iterM (entryUpdateFile allCabalFiles) =$=
-           CL.mapM_ (entryUpdateFile allCabalHashes)) *>
+       (ZipSink (CL.mapM_ (entryUpdateFile allCabalFiles)) *>
+        ZipSink (CL.mapM_ (entryUpdateFile allCabalHashes)) *>
         ZipSink (CL.mapM_ (entryUpdateHashes allCabalHashes)) *>
         ZipSink sinkPackageVersions))
   updateMetadata allCabalMetadata allCabalFiles packageVersions

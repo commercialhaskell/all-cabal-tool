@@ -62,7 +62,6 @@ withRepository info@GitInfo {..} action = do
         resolveRevision git (fromString gitBranchName)
       headSet git (Right (RefName gitBranchName))
       branchRefMVar <- newMVar branchRef
-      {-
       rootTree <-
         case gitRootTree of
           Just rootTree -> return rootTree
@@ -76,11 +75,6 @@ withRepository info@GitInfo {..} action = do
               resolvePath git branchRef []
             readWorkTree git rootTreeRef
       workTreeMVar <- newMVar (rootTree, emptyWorkTree)
-      -}
-      workTreeMVar <-
-        case gitRootTree of
-          Just rootTree -> newMVar (rootTree, emptyWorkTree)
-          Nothing -> newEmptyMVar
       res <-
         action
           GitRepository
@@ -93,18 +87,6 @@ withRepository info@GitInfo {..} action = do
           , repoInfo = info
           }
       newInfo <-
-        do workTreeEmpty <- isEmptyMVar workTreeMVar
-           if workTreeEmpty
-             then return info
-             else withMVar workTreeMVar $
-                  \(rootTree, _) ->
-                     return $
-                     info
-                     { gitRootTree = Just rootTree
-                     }
-      return (newInfo, res)
-      {-
-      newInfo <-
         withMVar workTreeMVar $
         \(newRootTree, _) ->
            return $
@@ -112,49 +94,31 @@ withRepository info@GitInfo {..} action = do
            { gitRootTree = Just newRootTree
            }
       return (newInfo, res)
-      -}
 
-
-
-ensureWorkTree :: GitRepository -> IO ()
-ensureWorkTree GitRepository {repoInstance = GitInstance {..}
-                             ,repoInfo = GitInfo {..}} = do
-  workTreeEmpty <- isEmptyMVar gitWorkTree
-  when workTreeEmpty $
-    withMVar gitBranchRef $
-    \branchRef -> do
-      rootTreeRef <-
-        maybe
-          (error $
-           "Cannot resolve root tree for " ++
-           gitBranchName ++ " for repository: " ++ gitLocalPath)
-          id <$>
-        resolvePath gitRepo branchRef []
-      rootTree <- readWorkTree gitRepo rootTreeRef
-      putMVar gitWorkTree (rootTree, emptyWorkTree)
 
 
 -- | Reads a file from the repository. In case an updated verion the file exists
 -- in a work tree it will be used instead of one in the repo. Returns `Nothing`
 -- if the file cannot be found under the supplied `FilePath`.
 repoReadFile :: GitRepository -> FilePath -> IO (Maybe LByteString)
-repoReadFile repo@GitRepository {repoInstance = GitInstance {..}} fp = do
-  ensureWorkTree repo
-  withMVar gitWorkTree $ \ (rootTree, workTree) -> do
-    let treePath = toTreePath fp
-    case lookupFile workTree treePath of
-      Just f -> do
-        let (_, blob) =
-              looseUnmarshallZippedRaw $ Zipped $ L.fromStrict $ gitFileZipped f
-        return $ Just blob
-      Nothing -> do
-        case lookupFile rootTree treePath of
-          Just sRef -> do
-            mobj <- getObject gitRepo (fromShortRef sRef) True
-            case mobj of
-              Just (G.ObjBlob (G.Blob blob)) -> return $ Just blob
-              _ -> return Nothing
-          Nothing -> return Nothing
+repoReadFile GitRepository {repoInstance = GitInstance {..}} fp = do
+  withMVar gitWorkTree $
+    \(rootTree, workTree) -> do
+      let treePath = toTreePath fp
+      case lookupFile workTree treePath of
+        Just f -> do
+          let (_, blob) =
+                looseUnmarshallZippedRaw $
+                Zipped $ L.fromStrict $ gitFileZipped f
+          return $ Just blob
+        Nothing -> do
+          case lookupFile rootTree treePath of
+            Just sRef -> do
+              mobj <- getObject gitRepo (fromShortRef sRef) True
+              case mobj of
+                Just (G.ObjBlob (G.Blob blob)) -> return $ Just blob
+                _ -> return Nothing
+            Nothing -> return Nothing
 
 
 
@@ -181,9 +145,8 @@ repoWriteFile repo fp f =
 -- `GitFile`, which is a version of the file that is already prepared for
 -- writing as an object into the git repository.
 repoWriteGitFile :: GitRepository -> FilePath -> GitFile -> IO ()
-repoWriteGitFile repo@GitRepository {repoInstance = GitInstance {..}} fp f = do
+repoWriteGitFile GitRepository {repoInstance = GitInstance {..}} fp f = do
   let treePath = toTreePath fp
-  ensureWorkTree repo
   modifyMVar_ gitWorkTree $
     \(rootTree, workTree) -> do
       newWorkTree <-
@@ -207,7 +170,6 @@ repoCreateCommit :: GitRepository -- ^ Current repository.
                  -> IO (Maybe Ref)
 repoCreateCommit repo@GitRepository {repoInstance = GitInstance {..}
                                     ,repoInfo = GitInfo {..}} msg = do
-  ensureWorkTree repo
   mtreeRef <- flushWorkTree repo
   case mtreeRef of
     Nothing -> do

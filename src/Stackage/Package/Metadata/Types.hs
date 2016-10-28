@@ -138,7 +138,7 @@ data CabalFile = CabalFile
 
 
 parseCabalFile :: LByteString -> CabalFile
-parseCabalFile lbs =
+parseCabalFile lbs = 
   CabalFile
   { cfPackage = package pd
   , cfHash = unDigest SHA256 $ hashlazy lbs
