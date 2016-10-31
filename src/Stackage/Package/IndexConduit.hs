@@ -56,16 +56,17 @@ httpTarballSink
      -- processed.
   -> m a
 httpTarballSink req isCompressed tarSink = do
-    man <- liftIO H.getGlobalManager
-    bracket (liftIO $ H.responseOpen req man) (liftIO . H.responseClose) $ \res -> do
-        let src' = bodyReaderSource $ H.responseBody res
-            src =
-                if isCompressed
-                    then src' =$= ungzip
-                    else src'
-            res_ = const () <$> res
-        tarChunks <- liftIO $ lazyConsume src
-        (sourceEntries $ Tar.read $ L.fromChunks tarChunks) $$ tarSink res_
+  man <- liftIO H.getGlobalManager
+  bracket (liftIO $ H.responseOpen req man) (liftIO . H.responseClose) $
+    \res -> do
+      let src' = bodyReaderSource $ H.responseBody res
+          src =
+            if isCompressed
+              then src' =$= ungzip
+              else src'
+          res_ = const () <$> res
+      tarChunks <- liftIO $ lazyConsume src
+      (sourceEntries $ Tar.read $ L.fromChunks tarChunks) $$ tarSink res_
 
 
 sourceEntries

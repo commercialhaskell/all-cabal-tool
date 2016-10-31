@@ -9,6 +9,7 @@ module Stackage.Package.Git.WorkTree
   , insertGitFile
   , removeGitFile
   , lookupFile
+  , showWorkTree
   ) where
 
 import ClassyPrelude.Conduit
@@ -22,12 +23,13 @@ import qualified Data.Git as G
 import Data.Git.Ref
 import Data.Git.Storage
 import qualified Data.Map.Strict as Map
+import qualified Data.Tree as T
 
 import Stackage.Package.Git.Types
 import Stackage.Package.Git.Object
 
 
--- | Conver a work tree directory into a Tree object.
+-- | Convert a work tree directory into a Tree object.
 directoryToTree :: Map.Map FileName (WorkTree ShortRef ShortRef) -> G.Tree
 directoryToTree dirMap = G.Tree $ map toEnt' (Map.toAscList dirMap)
   where
@@ -56,17 +58,14 @@ insertGitFile :: WorkTree () GitFile -> TreePath -> GitFile -> WorkTree () GitFi
 insertGitFile tree path f = insertFileRec tree path
   where
     insertFileRec _ [] = error "Cannot insert a file without a name"
-    insertFileRec (Directory _ dirMap) [fName] =
+    insertFileRec !(Directory _ dirMap) [fName] =
       Directory () $ Map.insert fName (File f $ gitFileType f) dirMap
-    insertFileRec (Directory _ dirMap) (dirName:pathTail) = Directory () newDirMap
+    insertFileRec !(Directory _ dirMap) (dirName:pathTail) =
+      Directory () $ Map.alter with dirName dirMap
       where
-        newDirMap =
-          case Map.lookup dirName dirMap of
-            Just subTree@(Directory _ _) ->
-              Map.insert dirName (insertFileRec subTree pathTail) dirMap
-            _ ->
-              Map.insert dirName (insertFileRec (Directory () Map.empty) pathTail) dirMap
-    insertFileRec File {} treePath = insertFileRec (Directory () Map.empty) treePath
+        with (Just subTree@(Directory _ _)) = Just $ insertFileRec subTree pathTail
+        with _ = Just $ insertFileRec (Directory () Map.empty) pathTail
+    insertFileRec !(File {}) treePath = insertFileRec (Directory () Map.empty) treePath
 
 
 -- | Returns a file from a work tree if one extst at a supplied path.
@@ -85,17 +84,13 @@ lookupFile tree path = getFile $ lookupRec tree path
 
 
 removeGitFile :: WorkTree () GitFile -> TreePath -> WorkTree () GitFile
-removeGitFile tree path = removeRec tree path
+removeGitFile = removeRec
   where
     removeRec _ [] = error "Cannot remove a file without a name."
-    removeRec (Directory _ dirMap) [fileName] =
-      Directory () $ Map.update (const Nothing) fileName dirMap
-    removeRec dir@(Directory _ dirMap) (dirName:pathTail) = newDir
-      where
-        newDir =
-          case Map.lookup dirName dirMap of
-            Just subTree -> removeRec subTree pathTail
-            Nothing -> dir
+    removeRec !(Directory _ dirMap) [fileName] =
+      Directory () $ Map.delete fileName dirMap
+    removeRec !(Directory _ dirMap) (dirName:pathTail) =
+      Directory () $ Map.update (Just . (`removeRec` pathTail)) dirName dirMap
     removeRec f@(File {}) _ = f
 
 
@@ -103,15 +98,15 @@ removeGitFile tree path = removeRec tree path
 readWorkTree :: Git -- ^ Git Repo.
              -> Ref -- ^ Reference for the root tree.
              -> IO (WorkTree ShortRef ShortRef)
-readWorkTree !repo !rootRef = {-# SCC "WorkTree.readWorkTree" #-} readTreeRec rootRef
+readWorkTree !repo !rootRef = readTreeRec rootRef
   where
     readTreeFile !(G.ModePerm mode, ent, ref)
       | mode == 0o120000 = do
         sRef <- toShortRef ref
-        return $! (FileName $! BS.toShort $! toBytes ent, File sRef SymLink)
+        return (FileName $! BS.toShort $! toBytes ent, File sRef SymLink)
       | mode == 0o160000 = do
         sRef <- toShortRef ref
-        return $! (FileName $! BS.toShort $! toBytes ent, File sRef GitLink)
+        return (FileName $! BS.toShort $! toBytes ent, File sRef GitLink)
       | (mode .&. 0o777000) == 0o100000 = do
         let !fileType =
               case mode .&. 0o777 of
@@ -120,13 +115,13 @@ readWorkTree !repo !rootRef = {-# SCC "WorkTree.readWorkTree" #-} readTreeRec ro
                 0o664 -> NonExecGroupFile
                 _ -> error $ "Unrecognized file type: " ++ show mode
         sRef <- toShortRef ref
-        return $! (FileName $! BS.toShort $! toBytes ent, File sRef fileType)
+        return (FileName $! BS.toShort $! toBytes ent, File sRef fileType)
       | mode == 0o040000 = do
         directory <- readTreeRec ref
-        return $!
+        return
           (DirectoryName $! BS.toShort $! S8.snoc (toBytes ent) '/', directory)
       | otherwise = error $ "Unsupported file mode: " ++ show mode
-    readTreeRec !ref = {-# SCC "WorkTree.readTreeRec" #-} do
+    readTreeRec !ref = do
       G.Tree tree <- G.getTree repo ref
       files <- mapM readTreeFile tree
       sRef <- toShortRef ref
@@ -198,3 +193,17 @@ flushWorkTree !repo@GitRepository {repoInstance = GitInstance {..}} = do
         if newDirMap == dirMap1
           then return d1
           else persistGitTree repo newDirMap
+
+
+workTreeToTree :: String -> WorkTree () GitFile -> T.Tree String
+workTreeToTree parentName (File gf _) =
+  T.Node (parentName ++ " with Ref: " ++ show (gitFileRef gf)) []
+workTreeToTree parentName (Directory _ dirMap) =
+  T.Node parentName $
+  map (\(k, v) -> workTreeToTree (show k) v) $
+  Map.toAscList dirMap
+
+
+-- | Show tree in a readable format. Useful for debugging.
+showWorkTree :: WorkTree () GitFile -> String
+showWorkTree = T.drawTree . workTreeToTree "/"

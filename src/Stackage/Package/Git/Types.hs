@@ -83,17 +83,29 @@ type GitCommit = G.Commit
 
 type GitTag = G.Tag
 
--- | A file name as it is expected to look like by git. This data type is
--- crutial for keeping files properly sorted in the work tree, as it is expected
--- by git.
+-- | This data type is crutial for keeping files properly sorted in the work
+-- tree, in a way that is expected by git. In particular it expects directories
+-- to have a trailing slash @/@, and it follows some properties:
+--
+-- @@@
+-- λ> FileName "foo" == DirectoryName "foo/"
+-- True
+-- λ> DirectoryName "foo-0.1/" > DirectoryName "foo-0.1.1/"
+-- True
+-- λ> "foo-0.1" > "foo-0.1.1" -- <= different from above
+-- False
+-- @@@
+--
 data FileName
   = FileName !BS.ShortByteString
     -- ^ Just a file name without a path to it.
   | DirectoryName !BS.ShortByteString
     -- ^ Directory name with a trailing slash, without it trees wouldn't get
     -- sorted properly: @("0.1" > "0.1.1") /= ("0.1/" > "0.1.1/")@
-  deriving (Show)
 
+instance Show FileName where
+  show (FileName fName) = show fName
+  show (DirectoryName dirName) = show dirName
 
 type TreePath = [FileName]
 
@@ -112,9 +124,12 @@ toTreePath path = foldr toFileName [] splitPath'
 
 instance Eq FileName where
   (==) (FileName f1) (FileName f2) = f1 == f2
-  (==) (FileName f) (DirectoryName d) = BS.fromShort f == S8.init (BS.fromShort d)
-  (==) (DirectoryName d) (FileName f) = S8.init (BS.fromShort d) == BS.fromShort f
   (==) (DirectoryName d1) (DirectoryName d2) = d1 == d2
+  (==) f1 f2 = fileNameToBS f1 == fileNameToBS f2
+
+fileNameToBS :: FileName -> ByteString
+fileNameToBS !(FileName f) = BS.fromShort f
+fileNameToBS !(DirectoryName d) = S8.init (BS.fromShort d)
 
 
 instance Ord FileName where
@@ -126,6 +141,7 @@ instance Ord FileName where
     | f == d = EQ
     | otherwise = compare dn fn
   compare (DirectoryName d1) (DirectoryName d2) = compare d1 d2
+
 
 -- | A very tight representation of SHA1 hash.
 data ShortRef =
@@ -179,6 +195,8 @@ data WorkTree d f
   deriving (Show)
 
 
+-- | This instance on directories only checks equality of SHAs, which means all
+-- subtrees are also equal, hence avoiding descend into all subtrees.
 instance Eq (WorkTree ShortRef ShortRef) where
   (File ref1 t1) == (File ref2 t2) = ref1 == ref2 && t1 == t2
   (Directory ref1 _) == (Directory ref2 _) = ref1 == ref2

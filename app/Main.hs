@@ -46,13 +46,11 @@ pushRepos Repositories {..} message = do
       case mcommitRef of
         Nothing -> return ()
         Just commitRef -> do
-          print commitRef
           run
             gitLocalPath
             "git"
             ["push", gitAddress, concat [gitBranchName, ":", gitBranchName]]
           mtagRef <- repoCreateTag repo commitRef message
-          print mtagRef
           case mtagRef of
             -- Tag newly created commit with the same message.
             Just _ -> run gitLocalPath "git" ["push", gitAddress, "--tags", "--force"]
@@ -211,7 +209,7 @@ main = do
         putStrLn $ "Checking index, etag == " ++ tshow mlastEtag
         commitMessage <- getCommitMessage
         (newInfo, mnewEtag) <- withRepositories reposInfo $ \ repos -> do
-          (updated, mnewEtag) <- (processIndexUpdate repos indexReq mlastEtag)
+          (updated, mnewEtag) <- processIndexUpdate repos indexReq mlastEtag
           when updated $
             do pushRepos repos commitMessage
                case ms3Bucket of
@@ -222,7 +220,7 @@ main = do
         threadDelay delay
         innerLoop newInfo mnewEtag
   let outerLoop = do
-        catchAnyDeep
+        catchAny
           (innerLoop reposInfoInit Nothing)
           (\e -> do
              hPutStrLn stderr $

@@ -58,7 +58,7 @@ withRepository info@GitInfo {..} action = do
         maybe
           (error $
            "Cannot resolve " ++ gitBranchName ++ " for repository: " ++ gitLocalPath)
-          id <$>
+          return =<<
         resolveRevision git (fromString gitBranchName)
       headSet git (Right (RefName gitBranchName))
       branchRefMVar <- newMVar branchRef
@@ -141,6 +141,7 @@ repoWriteFile repo fp f =
   makeGitFile f (fromIntegral $ length f) >>= repoWriteGitFile repo fp
 
 
+
 -- | Same as `repoWriteFile` except it is faster, since it operates on a
 -- `GitFile`, which is a version of the file that is already prepared for
 -- writing as an object into the git repository.
@@ -153,11 +154,12 @@ repoWriteGitFile GitRepository {repoInstance = GitInstance {..}} fp f = do
         case lookupFile rootTree treePath of
           Just sRef -> do
             sRef' <- toShortRef $ gitFileRef f
-            return $
+            return $!
               if sRef == sRef'
                 then removeGitFile workTree treePath
                 else insertGitFile workTree treePath f
-          Nothing -> return $ insertGitFile workTree treePath f
+          Nothing -> do
+            return $! insertGitFile workTree treePath f
       return (rootTree, newWorkTree)
 
 
@@ -262,11 +264,17 @@ signCommit gitRepo key commit = do
   -- Otherwise should be:
   -- let signatureKey = "gpgsig"
   --     signature = L.toStrict out
-  let signatureKey = L.toStrict $ L.append "gpgsig " $ L8.takeWhile (/='\n') signature
-      signature' = L.toStrict $ L.tail $ L8.dropWhile (/='\n') signature
+  let (sigBegin, sigRest) = L8.break (== '\n') signature
+  when (sigBegin /= "-----BEGIN PGP SIGNATURE-----" || L.null sigRest) $
+    error $
+    "Stackage.Package.Git.Repository.signCommit: Malformed signature: \n" ++
+    L8.unpack signature
+  let signatureKey = L.toStrict $ L.append "gpgsig " sigBegin
+      signature' = L.toStrict $ L.drop 1 sigRest
   return
     commit
-    { commitExtras = commitExtras commit ++ [CommitExtra signatureKey signature']
+    { commitExtras =
+      commitExtras commit ++ [CommitExtra signatureKey signature']
     }
 
 -- | Signs a tag
@@ -285,8 +293,15 @@ signObject :: Git -> String -> G.Object -> IO L.ByteString
 signObject gitRepo key obj = do
   gpgProgram <- maybe "gpg" id <$> configGet gitRepo "gpg" "program"
   let args = ["-bsau", key]
-  let payload = L.tail $ L.dropWhile (/= 0) $ looseMarshall obj
-  (signature, err) <- runPipe "." gpgProgram args payload
+  let (header, payload0) = L.break (== 0) $ looseMarshall obj
+      objType = G.objectTypeMarshall (G.objectToType obj)
+  when
+    (L8.pack (objType ++ " " ++ show (L.length payload0 - 1)) /= header ||
+     L.null payload0) $
+    error $
+    "Stackage.Package.Git.Repository.signObject: Marshalled object " ++
+    objType ++ " is malformed."
+  (signature, err) <- runPipe "." gpgProgram args $ L.drop 1 payload0
   unless (L.null err) $ putStrLn $ "Warning: " ++ pack (L8.unpack err)
   return signature
 

@@ -26,7 +26,6 @@ import Data.Git.Storage.Loose
 import System.Directory
 import System.FilePath
 
-
 import Stackage.Package.Git.Types
 
 
@@ -38,16 +37,20 @@ data GitObject
   | Tag GitTag
 
 
--- | Marshalls a bytestring into a git blob object, computes it's SHA1 and
--- compresses it and returnes a `GitFile` that is of type `NonExecFile`.
+-- | Marshalls a bytestring into a git blob object, computes its SHA1,
+-- compresses it and returns a `GitFile` that is of type `NonExecFile`.
 makeGitFile
   :: (MonadThrow m, PrimMonad base, MonadBase base m)
   => LByteString -- ^ Content of the blob.
   -> Word64 -- ^ Size of the content.
   -> m GitFile
 makeGitFile lbs sz = do
-  (sha1, zipped) <- runConduit $ srcWithHeader "blob" lbs sz
-    =$= getZipSink ((,) <$> ZipSink sha1Sink <*> ZipSink compressSink)
+  (sha1, zipped) <-
+    runConduit $
+    srcWithHeader "blob" lbs sz =$=
+    getZipSink ((,) <$> ZipSink sha1Sink <*> ZipSink compressSink)
+  unless (sz == fromIntegral (L.length lbs)) $
+    error "Stackage.Package.Git.makeGitFile: Size mismatch."
   return $
     GitFile
     { gitFileRef = unDigestRef sha1
@@ -109,9 +112,12 @@ marshallObject (Tag o) = (hashLBS content, Zlib.compress content)
 srcWithHeader
   :: (Monad m)
   => ByteString -> L.ByteString -> Word64 -> ConduitM i ByteString m ()
-srcWithHeader oType oContent oSize =
-  sourceLazy $
-  L.append (L.fromChunks [oType, " ", S8.pack $ show oSize, S.singleton 0]) oContent
+srcWithHeader oType oContent oSize = do
+  yield oType
+  yield " "
+  yield $ S8.pack $ show oSize
+  yield $ S.singleton 0
+  sourceLazy oContent
 
 
 compressSink
