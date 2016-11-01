@@ -1,12 +1,8 @@
 {-# OPTIONS_GHC -fno-warn-redundant-constraints #-}
-{-# LANGUAGE NamedFieldPuns #-}
-{-# LANGUAGE RecordWildCards #-}
-{-# LANGUAGE FlexibleContexts #-}
 {-# LANGUAGE FlexibleInstances #-}
-{-# LANGUAGE MultiParamTypeClasses #-}
+{-# LANGUAGE RecordWildCards #-}
 {-# LANGUAGE NoImplicitPrelude #-}
 {-# LANGUAGE OverloadedStrings #-}
-{-# LANGUAGE ViewPatterns #-}
 
 module Stackage.Package.Hashes where
 
@@ -27,9 +23,9 @@ import Network.HTTP.Client.Conduit
         responseCookieJar, responseHeaders, responseStatus)
 import Network.HTTP.Types (statusCode)
 import Network.HTTP.Simple (httpSink)
-import System.Directory
 import System.FilePath (dropExtension)
 
+import Stackage.Package.Git
 import Stackage.Package.Locations
 import Stackage.Package.IndexConduit
 
@@ -39,31 +35,24 @@ import Stackage.Package.IndexConduit
 -- 
 entryUpdateHashes
   :: (MonadMask m, MonadIO m)
-  => GitRepository -> IndexFileEntry -> m ()
-{- Handle a possiblity of malformed 'package.json' file -}
-entryUpdateHashes _ (HashesFileEntry IndexFile {ifParsed = Left err
-                                               ,ifPath}) =
-  error $
-  "Stackage.Hackage.Hashes.entryUpdateHashes: There was an issue parsing: " ++
-  ifPath ++ ". Parsing error: " ++ err
-{- Create hashes if not present yet and validate that values with Hackage do agree. -}
-entryUpdateHashes hashesRepo (HashesFileEntry IndexFile {ifPackageVersion = Just pkgVersion
-                                                        ,ifParsed = Right hackageHashes
-                                                        ,..}) = do
-  mpackage <- createHashesIfMissing hashesRepo ifPackageName pkgVersion
+  => GitRepository -> IndexEntry -> m ()
+entryUpdateHashes hashesRepo (PackageEntry IndexFile {ifFile = HackagePackage {..}
+                                                     ,..}) = do
+  mpackage <- createHashesIfMissing hashesRepo ifPackageName hackageVersion
   case mpackage of
     Nothing -> return ()
-    Just package -> mapM_ checkHash [tshow MD5, tshow SHA256]
-      where checkHash hashType =
-              unless
-                (Map.lookup (toLower hashType) (hHashes hackageHashes) ==
-                 Map.lookup hashType (packageHashes package))
-                (error $
-                 "Hash " ++
-                 unpack hashType ++
-                 "value mismatch for: '" ++
-                 getPackageFullName ifPackageName pkgVersion ++
-                 "' computed vs one from Hackage.")
+    Just package ->
+      forM_ [tshow MD5, tshow SHA256] $
+      \hashType ->
+         unless
+           (Map.lookup (toLower hashType) (hHashes hackageHashes) ==
+            Map.lookup hashType (packageHashes package))
+           (error $
+            "Stackage.Hackage.Hashes.entryUpdateHashes: Hash " ++
+            unpack hashType ++
+            "value mismatch for: '" ++
+            getPackageFullName ifPackageName hackageVersion ++
+            "' computed vs one from Hackage.")
 entryUpdateHashes _ _ = return ()
 
 -- | If json file with package hashes is missing or corrupt (not parsable) it
@@ -71,27 +60,25 @@ entryUpdateHashes _ _ = return ()
 createHashesIfMissing
   :: (MonadMask m, MonadIO m)
   => GitRepository -> PackageName -> Version -> m (Maybe (Package Identity))
-createHashesIfMissing hashesRepo pkgName pkgVersion = do
-  let jsonfp = dropExtension (getCabalFilePath pkgName pkgVersion) <.> "json"
-  exists <- liftIO $ repoFileReader hashesRepo jsonfp doesFileExist
-  mpackageHashes <-
-    if exists
-      then do
-        res <- liftIO $ repoFileReader hashesRepo jsonfp readFile
-        case eitherDecode' res of
-          Left e -> error $ concat ["Could not parse ", jsonfp, ": ", e]
-          Right x -> return $ flatten x
-      else return Nothing
-  case mpackageHashes of
-    Just packageHashes -> return $ Just packageHashes
-    Nothing -> do
-      mpackageComputed <- computePackage pkgName pkgVersion
-      case mpackageComputed of
-        Nothing -> return Nothing
-        Just packageHashes -> do
-          liftIO $
-            repoFileWriter hashesRepo jsonfp (`writeFile` encode packageHashes)
-          return $ Just packageHashes
+createHashesIfMissing hashesRepo pkgName pkgVersion =
+  liftIO $
+  do let jsonfp = dropExtension (getCabalFilePath pkgName pkgVersion) <.> "json"
+     meres <- (fmap eitherDecode') <$> repoReadFile hashesRepo jsonfp
+     let mpackageHashes =
+           case meres of
+             (Just (Left e)) ->
+               error $ concat ["Could not parse ", jsonfp, ": ", e]
+             (Just (Right x)) -> flatten x
+             _ -> Nothing
+     case mpackageHashes of
+       Just packageHashes -> return $ Just packageHashes
+       Nothing -> do
+         mpackageComputed <- computePackage pkgName pkgVersion
+         case mpackageComputed of
+           Nothing -> return Nothing
+           Just packageHashes -> do
+             repoWriteFile hashesRepo jsonfp (encode packageHashes)
+             return $ Just packageHashes
 
 -- | Kinda like sequence, except not.
 flatten :: Package Maybe -> Maybe (Package Identity)
