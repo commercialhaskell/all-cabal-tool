@@ -13,7 +13,7 @@ source /secret-mirror/config.sh
 
 exec /usr/local/bin/all-cabal-tool \
     --username all-cabal-tool \
-    --email michael+all-cabal-tool@snoyman.com \
+    --email michael+all-cabal-files@snoyman.com \
     --gpg-sign D6CF60FD \
     --s3-bucket $S3_BUCKET \
     --aws-access-key $AWS_ACCESS_KEY_ID \
