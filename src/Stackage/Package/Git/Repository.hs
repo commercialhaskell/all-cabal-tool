@@ -180,9 +180,11 @@ repoCreateCommit repo@GitRepository {repoInstance = GitInstance {..}
     Just treeRef -> do
       modifyMVar gitBranchRef $ \branchRef -> do
         commit <- makeGitCommit treeRef [branchRef] gitUser msg
+        -- adjust for improper marshalling by hit package:
+        let commit' = commit { commitMessage = S8.append (commitMessage commit) "\n" }
         newCommit <- case userGpgKey gitUser of
-          Just key -> signCommit gitRepo key commit
-          Nothing -> return commit
+          Just key -> signCommit gitRepo key commit'
+          Nothing -> return commit'
         commitRef <- repoWriteObject repo (Commit newCommit)
         branchWrite gitRepo (RefName gitBranchName) commitRef
         return (commitRef, Just commitRef)
@@ -199,10 +201,12 @@ repoCreateTag repo@GitRepository {repoInstance = GitInstance {..}
                                  ,repoInfo = GitInfo {gitTagName = Just tagName
                                                      ,..}} commitRef tagMessage = do
   tag <- makeGitTag commitRef gitUser tagName tagMessage
+  -- adjust for improper marshalling by hit package:
+  let tag' = tag { tagS = S8.append (tagS tag) "\n" }
   newTag <-
     case userGpgKey gitUser of
-      Just key -> signTag gitRepo key tag
-      Nothing -> return tag
+      Just key -> signTag gitRepo key tag'
+      Nothing -> return tag'
   ref <- repoWriteObject repo (Tag newTag)
   writeFile (gitLocalPath </> "refs" </> "tags" </> S8.unpack (G.tagBlob newTag)) (show ref)
   return $ Just ref
@@ -283,7 +287,7 @@ signTag gitRepo key tag = do
   signature <- signObject gitRepo key (G.ObjTag tag)
   return
     tag
-    { tagS = S8.intercalate "\n" [tagS tag, L.toStrict signature]
+    { tagS = S8.append (tagS tag) (L.toStrict signature)
     }
 
 
