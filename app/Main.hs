@@ -74,7 +74,7 @@ getReposInfo path account gitUser = do
       { gitTagName = Just "current-hackage"
       }
     , allCabalMetadataInfo)
-  
+
 -- | Upload an oldstyle '00-index.tar.gz' (i.e. without package.json files) to
 -- an S3 bucket.
 updateIndex00 :: Credentials -> BucketName -> GitRepository -> IO ()
@@ -106,16 +106,32 @@ processIndexUpdate
   -> Request -- ^ Request that should be processed
   -> Maybe ByteString -- ^ Previous Etag, so we can check if the content has changed.
   -> m (Bool, Maybe ByteString)
-processIndexUpdate repos indexReq mlastEtag = do
-  let indexReqWithEtag = maybe id (addRequestHeader "if-none-match") mlastEtag indexReq
-  httpTarballSink
-    indexReqWithEtag
-    True
-    (\res ->
-        case getResponseStatusCode res of
-          200 -> (True, listToMaybe $ getResponseHeader "etag" res) <$ allCabalUpdate repos
-          304 -> return (False, mlastEtag)
-          _ -> error $ "Unexpected status: " ++ show (getResponseStatus res))
+processIndexUpdate repos indexReq mLastEtag = do
+  let indexReqWithEtag =
+        maybe id (addRequestHeader "if-none-match") mLastEtag indexReq
+  mValidVersionsWithEtag <-
+    httpTarballSink
+      indexReqWithEtag
+      True
+      (\res ->
+         case getResponseStatusCode res of
+           200 -> do
+             validVersions <- allHashesUpdate repos
+             return $
+               Just (validVersions, listToMaybe $ getResponseHeader "etag" res)
+           304 -> return Nothing
+           _ -> error $ "Unexpected status: " ++ show (getResponseStatus res))
+  case mValidVersionsWithEtag of
+    Nothing -> return (False, mLastEtag)
+    Just (validVersions, mNewEtag) ->
+      httpTarballSink
+        indexReqWithEtag
+        True
+        (\res ->
+           case getResponseStatusCode res of
+             200 -> (True, mNewEtag) <$ allCabalUpdate repos validVersions
+             304 -> return (False, mLastEtag)
+             _ -> error $ "Unexpected status: " ++ show (getResponseStatus res))
 
 
 
@@ -126,6 +142,7 @@ data Options = Options
                , oEmail :: String
                , oGPGSign :: String
                , oLocalPath :: Maybe FilePath -- default $HOME
+               , oGithubAccount :: String -- default "commercialhaskell"
                , oDelay :: Maybe Int -- default 60 seconds
                , oS3Bucket :: Maybe BucketName
                , oAwsCredentials :: Credentials
@@ -163,6 +180,11 @@ optionsParser =
          help
            ("Path where all-cabal-* repositories are/will be. " ++
             "(Default $HOME environment variable)")))) <*>
+  (strOption
+     (long "github-account" <> value "commercialhaskell" <>
+      help
+        ("Github account where all-cabal-* repos are located. " ++
+         "(Default \"commercialhaskell\")"))) <*>
   (optional
      (option
         auto
@@ -170,13 +192,14 @@ optionsParser =
          help
            ("Delay in seconds before next check for a new version " ++
             "of 01-index.tar.gz file")))) <*>
-  (optional ((BucketName . pack) <$> 
-     (strOption
-        (long "s3-bucket" <>
-         help
-           ("Access key for uploading 00-index.tar.gz. " ++
-            "If none, uploading will be skipped. " ++
-            "(Default is $S3_BUCKET environment variable)"))))) <*>
+  (optional
+     ((BucketName . pack) <$>
+      (strOption
+         (long "s3-bucket" <>
+          help
+            ("Access key for uploading 00-index.tar.gz. " ++
+             "If none, uploading will be skipped. " ++
+             "(Default is $S3_BUCKET environment variable)"))))) <*>
   awsCredentialsParser <*
   abortOption ShowHelpText (long "help" <> help "Display this help text.")
 
@@ -188,8 +211,7 @@ main = do
   Options {..} <- execParser (info optionsParser fullDesc)
   localPath <- maybe (getEnv "HOME") return oLocalPath
   eS3Bucket <- lookupEnv "S3_BUCKET"
-  let gitAccount = "commercialhaskell"
-      delay = fromMaybe 60 oDelay * 1000000
+  let delay = fromMaybe 60 oDelay * 1000000
       ms3Bucket = msum [oS3Bucket, (BucketName . pack) <$> eS3Bucket]
       gitUser =
         GitUser
@@ -204,7 +226,7 @@ main = do
     putStrLn
       "WARNING: No s3-bucket is provided. Uploading of 00-index.tar.gz will be disabled."
   indexReq <- parseRequest $ mirrorFPComplete ++ "/01-index.tar.gz"
-  reposInfoInit <- getReposInfo localPath gitAccount gitUser
+  reposInfoInit <- getReposInfo localPath oGithubAccount gitUser
   let innerLoop reposInfo mlastEtag = do
         putStrLn $ "Checking index, etag == " ++ tshow mlastEtag
         commitMessage <- getCommitMessage

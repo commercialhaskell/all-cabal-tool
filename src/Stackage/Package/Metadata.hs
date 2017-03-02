@@ -1,5 +1,5 @@
-{-# LANGUAGE RecordWildCards #-}
 {-# LANGUAGE OverloadedStrings #-}
+{-# LANGUAGE RecordWildCards   #-}
 
 module Stackage.Package.Metadata
   ( module Stackage.Package.Metadata.Types
@@ -22,17 +22,17 @@ import Data.Text.Encoding (decodeUtf8With)
 import Data.Text.Encoding.Error (lenientDecode)
 import Data.Version (Version)
 import qualified Data.Yaml as Y (decodeEither, encode)
-import Distribution.Package (PackageIdentifier(..), PackageName)
+import Distribution.Package (PackageIdentifier(..), PackageName(..))
 import Distribution.Version (VersionRange, withinRange)
-import Network.HTTP.Types (status200)
 import Network.HTTP.Simple
+import Network.HTTP.Types (status200)
 import Prelude hiding (pi)
-import System.FilePath (splitExtension, takeFileName, (<.>), (</>))
-
-import Stackage.Package.Metadata.Types
-import Stackage.Package.IndexConduit
 import Stackage.Package.Git
+import Stackage.Package.IndexConduit
 import Stackage.Package.Locations
+import Stackage.Package.Metadata.Types
+import System.FilePath (splitExtension, takeFileName, (<.>), (</>))
+import System.IO (hPutStrLn, stderr)
 
 -- | Collects all available package versions along with preferred versions if
 -- such are provided.
@@ -63,39 +63,43 @@ sinkPackageVersions = CL.fold trackVersions Map.empty
 -- produced by `sinkPackageVersions` and cabal files from the second repo.
 updateMetadata
   :: (MonadIO m)
-  => GitRepository -- ^ Matadata repository
-  -> GitRepository -- ^ Repository with cabal files
+  => Repositories -- ^ Repositories
+  -> Map PackageName (Set Version) -- ^ Valid package version set.
   -> Map PackageName (Set Version, Maybe VersionRange) -- ^ Packages version
      -- information
   -> m ()
-updateMetadata metadataRepo cabalFilesRepo packageVersions =
-  liftIO $
-  do let fromVersions versionsMap
-           | Map.null versionsMap = Nothing
-           | otherwise = Just $ Map.deleteFindMin versionsMap
-     let readCabalFile (packageName, (versionSet, mversionRange)) = do
-           let preferredVersionSet =
-                 case mversionRange of
-                   Nothing -> versionSet
-                   Just range -> Set.filter (`withinRange` range) versionSet
+updateMetadata Repositories {..} validPackages packageVersions =
+  liftIO $ do
+    let fromVersions versionsMap
+          | Map.null versionsMap = Nothing
+          | otherwise = Just $ Map.deleteFindMin versionsMap
+    let readCabalFile (packageName, (versionSet, mversionRange)) = do
+          let preferredVersionSet =
+                case mversionRange of
+                  Nothing -> versionSet
+                  Just range -> Set.filter (`withinRange` range) versionSet
            -- "From Hackage: If all the available versions of a package are
            -- non-preferred or deprecated, cabal-install will treat this the same
            -- as if none of them are."
-           let preferredVersionSetNonEmpty =
-                 if Set.null preferredVersionSet
-                   then versionSet
-                   else preferredVersionSet
-           let packageVersionMax = Set.findMax preferredVersionSetNonEmpty
-           when (Set.null preferredVersionSet) $
-             putStrLn $
-             "Info: Package preferred version set is empty: " ++
-             renderDistText packageName ++
-             ". Using all available versions for metadata."
-           let cabalFileName = getCabalFilePath packageName packageVersionMax
-           cabalFile <- parseCabalFile <$> repoReadFile' cabalFilesRepo cabalFileName
-           return (cabalFile, packageName, preferredVersionSetNonEmpty)
-     CL.unfold fromVersions packageVersions =$= CL.mapM readCabalFile $$
-       CL.mapM_ (updatePackageIfChanged metadataRepo)
+          let preferredVersionSetValid =
+                Set.intersection
+                  (maybe Set.empty id $ Map.lookup packageName validPackages) $
+                if Set.null preferredVersionSet
+                  then versionSet
+                  else preferredVersionSet
+          if Set.null preferredVersionSetValid
+            then do
+              hPutStrLn stderr $
+                "No valid versions found for: " ++ show (unPackageName packageName)
+              return Nothing
+            else do
+              let packageVersionMax = Set.findMax preferredVersionSetValid
+              let cabalFileName = getCabalFilePath packageName packageVersionMax
+              cabalFile <-
+                parseCabalFile <$> repoReadFile' allCabalFiles cabalFileName
+              return $ Just (cabalFile, packageName, preferredVersionSetValid)
+    CL.unfold fromVersions packageVersions =$= CL.mapMaybeM readCabalFile $$
+      CL.mapM_ (updatePackageIfChanged allCabalMetadata)
 
 updatePackageIfChanged
   :: MonadIO m
@@ -174,8 +178,8 @@ updatePackageIfChanged metadataRepo (cabalFile@CabalFile {..}, packageName, vers
     goEntry orig@(desc, desct, cl, clt) e =
       case (toEntryType $ Tar.entryPath e, toText $ Tar.entryContent e) of
         (ChangeLog clt', Just cl') -> (desc, desct, cl', clt')
-        (Desc desct', Just desc') -> (desc', desct', cl, clt)
-        _ -> orig
+        (Desc desct', Just desc')  -> (desc', desct', cl, clt)
+        _                          -> orig
     toText (Tar.NormalFile lbs' _) =
       Just $ decodeUtf8With lenientDecode $ L.toStrict lbs'
     toText _ = Nothing
@@ -219,6 +223,6 @@ toEntryType fp
     name = unpack $ toLower $ pack $ takeFileName name'
     t =
       case ext of
-        ".md" -> "markdown"
+        ".md"       -> "markdown"
         ".markdown" -> "markdown"
-        _ -> "text"
+        _           -> "text"

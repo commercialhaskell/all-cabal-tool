@@ -1,11 +1,11 @@
 name:                all-cabal-tool
-version:             0.1.0.0
+version:             0.1.1.0
 synopsis:            Update the various all-cabal-* repos
 description:         Please see README.md
 homepage:            https://github.com/commercialhaskell/all-cabal-tool#readme
 license:             MIT
 license-file:        LICENSE
-author:              Michael Snoyman
+author:              Michael Snoyman, Alexey Kuleshevich
 maintainer:          michael@snoyman.com
 category:            Distribution
 build-type:          Simple
@@ -25,11 +25,11 @@ library
                      , Stackage.Package.Metadata
                      , Stackage.Package.Metadata.Types
                      , Stackage.Package.Update
-  build-depends:       base
+  build-depends:       Cabal
+                     , aeson
+                     , base
                      , byteable
                      , bytestring
-                     , aeson
-                     , Cabal
                      , classy-prelude-conduit
                      , conduit
                      , conduit-extra
