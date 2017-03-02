@@ -39,7 +39,6 @@ import Network.HTTP.Client.Conduit
 import Text.PrettyPrint (render)
 import qualified Network.HTTP.Client as H
 import qualified Network.HTTP.Client.TLS as H
-
 import Stackage.Package.Git
 
 -- | Download a tarball from a webserver, decompress, parse it and handle it
@@ -113,7 +112,7 @@ data IndexEntry
 data HackageHashes = HackageHashes
   { hHashes :: !(Map Text Text)
   , hLength :: !Word64
-  }
+  } deriving Eq
 
 instance FromJSON HackageHashes where
   parseJSON =

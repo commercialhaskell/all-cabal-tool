@@ -1,93 +1,149 @@
 {-# OPTIONS_GHC -fno-warn-redundant-constraints #-}
+{-# OPTIONS_GHC -fno-warn-orphans #-}
+{-# LANGUAGE RankNTypes        #-}
 {-# LANGUAGE FlexibleInstances #-}
-{-# LANGUAGE RecordWildCards #-}
 {-# LANGUAGE NoImplicitPrelude #-}
 {-# LANGUAGE OverloadedStrings #-}
+{-# LANGUAGE RecordWildCards   #-}
 
 module Stackage.Package.Hashes where
-
 import ClassyPrelude.Conduit
-import Data.ByteArray.Encoding (convertToBase, Base(Base16))
 import Crypto.Hash
-       (HashAlgorithm, MD5(..), SHA1(..), SHA256(..), SHA512(..),
-        Skein512_512(..), Digest)
+       (Digest, HashAlgorithm, MD5(..), SHA1(..), SHA256(..), SHA512(..),
+        Skein512_512(..))
 import Crypto.Hash.Conduit (sinkHash)
-import Data.Version (Version)
 import Data.Aeson
        (FromJSON(..), ToJSON(..), eitherDecode', encode, object,
         withObject, (.:), (.:?), (.=))
+import Data.ByteArray.Encoding (Base(Base16), convertToBase)
+import qualified Data.Conduit.List as CL
 import qualified Data.Map as Map
-import Distribution.Package (PackageName)
+import qualified Data.Set as Set
+import Data.Version (Version)
+import Distribution.Package (PackageName(..))
 import Network.HTTP.Client.Conduit
        (HttpException(StatusCodeException), parseRequest,
         responseCookieJar, responseHeaders, responseStatus)
-import Network.HTTP.Types (statusCode)
 import Network.HTTP.Simple (httpSink)
+import Network.HTTP.Types (statusCode)
 import System.FilePath (dropExtension)
 
 import Stackage.Package.Git
-import Stackage.Package.Locations
 import Stackage.Package.IndexConduit
+import Stackage.Package.Locations
+
 
 -- | Compares hashes in 'package.json' to the ones in the repo. In case a new
 -- package.json appears without coresponding hashes in the repo, a package is
 -- downloaded, hashes are computed and compared to ones in 'package.json' file.
--- 
-entryUpdateHashes
-  :: (MonadMask m, MonadIO m)
-  => GitRepository -> IndexEntry -> m ()
-entryUpdateHashes hashesRepo (PackageEntry IndexFile {ifFile = HackagePackage {..}
-                                                     ,..}) = do
-  mpackage <- createHashesIfMissing hashesRepo ifPackageName hackageVersion
-  case mpackage of
-    Nothing -> return ()
-    Just package ->
-      forM_ [tshow MD5, tshow SHA256] $
-      \hashType ->
-         unless
-           (Map.lookup (toLower hashType) (hHashes hackageHashes) ==
-            Map.lookup hashType (packageHashes package))
-           (error $
-            "Stackage.Hackage.Hashes.entryUpdateHashes: Hash " ++
-            unpack hashType ++
-            "value mismatch for: '" ++
-            getPackageFullName ifPackageName hackageVersion ++
-            "' computed vs one from Hackage.")
-entryUpdateHashes _ _ = return ()
+-- Returned is a map with all packages and their valid versions.
+sinkPackageHashes
+  :: (MonadIO m, MonadMask m)
+  => GitRepository
+  -> Consumer IndexEntry m (Map PackageName (Set Version))
+sinkPackageHashes hashesRepo = CL.foldM updateHashes Map.empty
+  where
+    updateHashes versionsMap (PackageEntry IndexFile { ifFile = HackagePackage {..}
+                                                     , ..
+                                                     }) = do
+      validHashes <-
+        createHashesIfMissing
+          hashesRepo
+          (hHashes hackageHashes)
+          ifPackageName
+          hackageVersion
+      return $
+        case validHashes of
+          False -> versionsMap
+          True ->
+            let with =
+                  Just .
+                  maybe
+                    (Set.singleton hackageVersion)
+                    (Set.insert hackageVersion)
+            in Map.alter with ifPackageName versionsMap
+    updateHashes versionsMap _ = return versionsMap
+
+
+-- | Generate package hashes file name.
+makeHashesFileName :: PackageName -> Version -> FilePath
+makeHashesFileName pkgName pkgVersion =
+  dropExtension (getCabalFilePath pkgName pkgVersion) <.> "json"
+
+
+-- | Checks wether hashes file exists for specific package version.
+containsHashesFor :: Map PackageName (Set Version) -> PackageName -> Version -> Bool
+containsHashesFor versionsMap pkgName pkgVersion =
+  maybe False (Set.member pkgVersion) $ lookup pkgName versionsMap
+
+-- | Validates hashes against @package.json@ file.
+validateHackageHashes :: (MonadIO m, Eq a) =>
+                         Text -- ^ Package name
+                      -> Map Text a -- ^ Map with hashes from Hackage
+                      -> Map Text a -- ^ Map with hashes from all-cabal-hashes
+                      -> m Bool
+validateHackageHashes packageName hackageHashesMap packageHashesMap =
+  fmap and $
+  forM [tshow MD5, tshow SHA256] $ \hashType -> do
+    let isValid =
+          lookup (toLower hashType) hackageHashesMap ==
+          lookup hashType packageHashesMap
+    unless
+      isValid
+      (hPutStrLn stderr $
+       "Stackage.Hackage.Hashes.entryUpdateHashes: Hash " ++
+       hashType ++
+       "value mismatch for: '" ++
+       packageName ++ "' computed vs one from Hackage.")
+    return isValid
+
 
 -- | If json file with package hashes is missing or corrupt (not parsable) it
 -- downloads the taralls with source code and saves their the hashes.
 createHashesIfMissing
   :: (MonadMask m, MonadIO m)
-  => GitRepository -> PackageName -> Version -> m (Maybe (Package Identity))
-createHashesIfMissing hashesRepo pkgName pkgVersion =
-  liftIO $
-  do let jsonfp = dropExtension (getCabalFilePath pkgName pkgVersion) <.> "json"
-     meres <- (fmap eitherDecode') <$> repoReadFile hashesRepo jsonfp
-     let mpackageHashes =
-           case meres of
-             (Just (Left e)) ->
-               error $ concat ["Could not parse ", jsonfp, ": ", e]
-             (Just (Right x)) -> flatten x
-             _ -> Nothing
-     case mpackageHashes of
-       Just packageHashes -> return $ Just packageHashes
-       Nothing -> do
-         mpackageComputed <- computePackage pkgName pkgVersion
-         case mpackageComputed of
-           Nothing -> return Nothing
-           Just packageHashes -> do
-             repoWriteFile hashesRepo jsonfp (encode packageHashes)
-             return $ Just packageHashes
+  => GitRepository
+  -> Map Text Text -- ^ Map with hashes from Hackage
+  -> PackageName
+  -> Version
+  -> m Bool
+createHashesIfMissing hashesRepo hackageHashMap pkgName pkgVersion =
+  liftIO $ do
+    let jsonfp = makeHashesFileName pkgName pkgVersion
+    meres <- fmap eitherDecode' <$> repoReadFile hashesRepo jsonfp
+    let mpackageHashes =
+          case meres of
+            (Just (Left e)) ->
+              error $ concat ["Could not parse ", jsonfp, ": ", e]
+            (Just (Right x)) -> flatten x
+            _ -> Nothing
+    case mpackageHashes of
+      Just package ->
+        validateHackageHashes
+          (pack $ getPackageFullName pkgName pkgVersion)
+          hackageHashMap
+          (packageHashes package)
+      Nothing -> do
+        mpackageComputed <- computePackage pkgName pkgVersion
+        case mpackageComputed of
+          Nothing -> return False
+          Just package -> do
+            areAllValid <-
+              validateHackageHashes
+                (pack $ getPackageFullName pkgName pkgVersion)
+                hackageHashMap
+                (packageHashes package)
+            when areAllValid $ repoWriteFile hashesRepo jsonfp (encode package)
+            return areAllValid
 
 -- | Kinda like sequence, except not.
 flatten :: Package Maybe -> Maybe (Package Identity)
 flatten (Package h l ms) = Package h l . Identity <$> ms
 
 data Package f = Package
-  { packageHashes :: Map Text Text
+  { packageHashes    :: Map Text Text
   , packageLocations :: [Text]
-  , packageSize :: f Word64
+  , packageSize      :: f Word64
   }
 
 instance ToJSON (Package Identity) where
@@ -111,29 +167,35 @@ computePackage pkgName pkgVersion = do
   putStrLn $ "Computing package information for: " ++ pack pkgFullName
   s3req <- parseRequest s3url
   hackagereq <- parseRequest hackageurl
-  mhashes <-
+  mHashes <-
     httpSink
       s3req
       (\resS3 ->
-          case statusCode $ responseStatus resS3 of
-            200 -> Just <$> pairSink
-            403 -> return Nothing
-            _ ->
-              throwM $
-              StatusCodeException
-                (responseStatus resS3)
-                (responseHeaders resS3)
-                (responseCookieJar resS3))
+         case statusCode $ responseStatus resS3 of
+           200 -> Just <$> pairSink
+           403 -> return Nothing
+           _ ->
+             throwM $
+             StatusCodeException
+               (responseStatus resS3)
+               (responseHeaders resS3)
+               (responseCookieJar resS3))
   hashesHackage <- httpSink hackagereq (const pairSink)
-  case mhashes of
-    Just hashes ->
-      when (hashes /= hashesHackage) $
-      error $
-      "Mismatched hashes between S3 and Hackage: " ++
-      show (pkgFullName, hashes, hashesHackage)
-    Nothing -> putStrLn $ "Skipping file not yet on S3: " ++ pack pkgFullName
+  mValidHashes <-
+    case mHashes of
+      Just hashes -> do
+        if (hashes /= hashesHackage)
+          then do
+            hPutStrLn stderr $
+              "Mismatched hashes between S3 and Hackage: " ++
+              show (pkgFullName, hashes, hashesHackage)
+            return Nothing
+          else return $ Just hashes
+      Nothing -> do
+        putStrLn $ "Skipping file not yet on S3: " ++ pack pkgFullName
+        return Nothing
   return $
-    case mhashes of
+    case mValidHashes of
       Nothing -> Nothing
       Just (hashes, size) ->
         Just
