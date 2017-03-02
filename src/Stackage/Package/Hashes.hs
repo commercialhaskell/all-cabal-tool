@@ -1,6 +1,5 @@
 {-# OPTIONS_GHC -fno-warn-redundant-constraints #-}
-{-# OPTIONS_GHC -fno-warn-orphans #-}
-{-# LANGUAGE RankNTypes        #-}
+{-# LANGUAGE Rank2Types        #-}
 {-# LANGUAGE FlexibleInstances #-}
 {-# LANGUAGE NoImplicitPrelude #-}
 {-# LANGUAGE OverloadedStrings #-}

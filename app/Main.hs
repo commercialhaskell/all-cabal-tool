@@ -109,7 +109,7 @@ processIndexUpdate
 processIndexUpdate repos indexReq mLastEtag = do
   let indexReqWithEtag =
         maybe id (addRequestHeader "if-none-match") mLastEtag indexReq
-  mValidVersions <-
+  mValidVersionsWithEtag <-
     httpTarballSink
       indexReqWithEtag
       True
@@ -121,7 +121,7 @@ processIndexUpdate repos indexReq mLastEtag = do
                Just (validVersions, listToMaybe $ getResponseHeader "etag" res)
            304 -> return Nothing
            _ -> error $ "Unexpected status: " ++ show (getResponseStatus res))
-  case mValidVersions of
+  case mValidVersionsWithEtag of
     Nothing -> return (False, mLastEtag)
     Just (validVersions, mNewEtag) ->
       httpTarballSink

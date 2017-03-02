@@ -74,8 +74,6 @@ updateMetadata Repositories {..} validPackages packageVersions =
           | Map.null versionsMap = Nothing
           | otherwise = Just $ Map.deleteFindMin versionsMap
     let readCabalFile (packageName, (versionSet, mversionRange)) = do
-          when (packageName == PackageName "amazonka-config") $
-            print (Map.lookup packageName validPackages)
           let preferredVersionSet =
                 case mversionRange of
                   Nothing -> versionSet
@@ -92,7 +90,7 @@ updateMetadata Repositories {..} validPackages packageVersions =
           if Set.null preferredVersionSetValid
             then do
               hPutStrLn stderr $
-                "No valid versions found for: " ++ show packageName
+                "No valid versions found for: " ++ show (unPackageName packageName)
               return Nothing
             else do
               let packageVersionMax = Set.findMax preferredVersionSetValid

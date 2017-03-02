@@ -112,7 +112,7 @@ data IndexEntry
 data HackageHashes = HackageHashes
   { hHashes :: !(Map Text Text)
   , hLength :: !Word64
-  } deriving Eq
+  }
 
 instance FromJSON HackageHashes where
   parseJSON =
