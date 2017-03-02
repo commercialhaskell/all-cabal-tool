@@ -64,13 +64,8 @@ sinkPackageHashes hashesRepo = CL.foldM updateHashes Map.empty
     updateHashes versionsMap _ = return versionsMap
 
 
--- | Generate package hashes file name.
-makeHashesFileName :: PackageName -> Version -> FilePath
-makeHashesFileName pkgName pkgVersion =
-  dropExtension (getCabalFilePath pkgName pkgVersion) <.> "json"
 
-
--- | Checks wether hashes file exists for specific package version.
+-- | Checks whether hashes file exists for specific package version.
 containsHashesFor :: Map PackageName (Set Version) -> PackageName -> Version -> Bool
 containsHashesFor versionsMap pkgName pkgVersion =
   maybe False (Set.member pkgVersion) $ lookup pkgName versionsMap
@@ -108,7 +103,7 @@ createHashesIfMissing
   -> m Bool
 createHashesIfMissing hashesRepo hackageHashMap pkgName pkgVersion =
   liftIO $ do
-    let jsonfp = makeHashesFileName pkgName pkgVersion
+    let jsonfp = dropExtension (getCabalFilePath pkgName pkgVersion) <.> "json"
     meres <- fmap eitherDecode' <$> repoReadFile hashesRepo jsonfp
     let mpackageHashes =
           case meres of
