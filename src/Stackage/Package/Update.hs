@@ -12,7 +12,7 @@ import qualified Data.ByteString.Lazy as L
 import Control.Monad.IO.Class (MonadIO(liftIO))
 import Data.Aeson as A (encode)
 import Distribution.Package (PackageName)
-import Data.Version (Version)
+import Distribution.Version (Version)
 import qualified Data.Conduit.List as CL
 import Data.Yaml as Y (encode)
 import Network.HTTP.Simple (parseRequest, httpJSONEither, getResponseBody)

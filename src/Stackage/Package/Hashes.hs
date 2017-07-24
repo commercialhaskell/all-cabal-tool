@@ -18,7 +18,7 @@ import Data.ByteArray.Encoding (Base(Base16), convertToBase)
 import qualified Data.Conduit.List as CL
 import qualified Data.Map as Map
 import qualified Data.Set as Set
-import Data.Version (Version)
+import Distribution.Version (Version)
 import Distribution.Package (PackageName(..))
 import Network.HTTP.Client.Conduit
        (HttpException(StatusCodeException), parseRequest,

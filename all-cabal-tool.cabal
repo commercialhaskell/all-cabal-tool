@@ -25,7 +25,7 @@ library
                      , Stackage.Package.Metadata
                      , Stackage.Package.Metadata.Types
                      , Stackage.Package.Update
-  build-depends:       Cabal
+  build-depends:       Cabal >= 2.0
                      , aeson
                      , base
                      , byteable

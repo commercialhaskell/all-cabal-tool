@@ -29,7 +29,7 @@ import qualified Data.Conduit.List as CL
 import Data.Conduit.Lazy (lazyConsume)
 import Data.Conduit.Zlib
 import Data.Foldable (msum)
-import Data.Version (Version)
+import Distribution.Version (Version)
 import Distribution.Compat.ReadP (readP_to_S)
 import Distribution.Package (PackageName)
 import Distribution.Text (disp, parse)

@@ -20,10 +20,9 @@ import qualified Data.Set as Set
 import Data.Text (Text, pack, toLower, unpack)
 import Data.Text.Encoding (decodeUtf8With)
 import Data.Text.Encoding.Error (lenientDecode)
-import Data.Version (Version)
 import qualified Data.Yaml as Y (decodeEither, encode)
-import Distribution.Package (PackageIdentifier(..), PackageName(..))
-import Distribution.Version (VersionRange, withinRange)
+import Distribution.Package (PackageIdentifier(..), PackageName, unPackageName)
+import Distribution.Version (VersionRange, withinRange, Version)
 import Network.HTTP.Simple
 import Network.HTTP.Types (status200)
 import Prelude hiding (pi)

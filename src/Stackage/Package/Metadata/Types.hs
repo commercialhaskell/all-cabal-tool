@@ -22,7 +22,6 @@ import Data.Text.Encoding.Error (lenientDecode)
 import qualified Data.Text.Lazy as TL (stripPrefix)
 import Data.Text.Lazy.Encoding (decodeUtf8With)
 import Data.Typeable (Typeable)
-import Data.Version (Version(Version))
 import Distribution.Compiler (CompilerFlavor(GHC))
 import Distribution.Package
        (Dependency(..), PackageIdentifier(..), PackageName)
@@ -35,9 +34,10 @@ import Distribution.PackageDescription
 import Distribution.System (Arch(X86_64), OS(Linux))
 import Distribution.Version
        (VersionRange, intersectVersionRanges, simplifyVersionRange,
-        withinRange)
+        withinRange, Version, mkVersion)
+import Distribution.Types.CondTree (CondBranch (..))
 import Distribution.PackageDescription.Parse
-       (ParseResult(..), parsePackageDescription)
+       (ParseResult(..), parseGenericPackageDescription)
 import Stackage.Package.IndexConduit
        (parseDistText, renderDistText)
 import Stackage.Package.Hashes (unDigest)
@@ -170,7 +170,7 @@ parseCabalFile fp lbs =
     -- https://github.com/haskell/hackage-server/issues/351
     dropBOM t = fromMaybe t $ TL.stripPrefix (pack "\xFEFF") t
     parseResult =
-      parsePackageDescription $
+      parseGenericPackageDescription $
       unpack $ dropBOM $ decodeUtf8With lenientDecode lbs
 
 
@@ -186,7 +186,7 @@ getCheckCond gpd = go
     go (CNot c) = not $ go c
     go (CAnd x y) = go x && go y
     go (COr x y) = go x || go y
-    ghcVersion = Version [7, 10, 1] [] -- arbitrary
+    ghcVersion = mkVersion [8, 0, 2] -- arbitrary
     flags = Map.fromList $ map toPair $ genPackageFlags gpd
       where
         toPair f = (flagName f, flagDefault f)
@@ -201,7 +201,7 @@ getDeps checkCond = goTree
       combineDeps $
       map (\(Dependency name range) -> Map.singleton name range) deps ++
       map goComp comps
-    goComp (cond, yes, no)
+    goComp (CondBranch cond yes no)
       | checkCond cond = goTree yes
       | otherwise = maybe Map.empty goTree no
 
