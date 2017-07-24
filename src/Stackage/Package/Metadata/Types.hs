@@ -137,8 +137,8 @@ data CabalFile = CabalFile
   }
 
 
-parseCabalFile :: LByteString -> CabalFile
-parseCabalFile lbs = 
+parseCabalFile :: FilePath -> LByteString -> CabalFile
+parseCabalFile fp lbs =
   CabalFile
   { cfPackage = package pd
   , cfHash = unDigest SHA256 $ hashlazy lbs
@@ -165,7 +165,7 @@ parseCabalFile lbs =
         ParseFailed perr ->
           error $
           "Stackage.Package.Metadata.Types.parseCabalFile: " ++
-          "Error parsing cabal file: " ++ show perr
+          "Error parsing cabal file " ++ show fp ++ ": " ++ show perr
         ParseOk _ gpd' -> gpd'
     -- https://github.com/haskell/hackage-server/issues/351
     dropBOM t = fromMaybe t $ TL.stripPrefix (pack "\xFEFF") t

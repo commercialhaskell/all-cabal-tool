@@ -96,7 +96,7 @@ updateMetadata Repositories {..} validPackages packageVersions =
               let packageVersionMax = Set.findMax preferredVersionSetValid
               let cabalFileName = getCabalFilePath packageName packageVersionMax
               cabalFile <-
-                parseCabalFile <$> repoReadFile' allCabalFiles cabalFileName
+                parseCabalFile cabalFileName <$> repoReadFile' allCabalFiles cabalFileName
               return $ Just (cabalFile, packageName, preferredVersionSetValid)
     CL.unfold fromVersions packageVersions =$= CL.mapMaybeM readCabalFile $$
       CL.mapM_ (updatePackageIfChanged allCabalMetadata)
