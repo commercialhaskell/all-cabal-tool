@@ -29,6 +29,7 @@ before_install:
 
 script:
 - mkdir -p to-travis
+- stack build Cabal # takes too much memory to do in parallel
 - stack --no-terminal test --copy-bins --local-bin-path to-travis
 - bzip2 to-travis/all-cabal-tool
 
