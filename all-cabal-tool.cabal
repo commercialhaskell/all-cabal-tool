@@ -51,7 +51,6 @@ library
                      , resourcet
                      , system-filepath
                      , tar
-                     , temporary
                      , text
                      , utf8-string
                      , yaml

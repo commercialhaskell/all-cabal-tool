@@ -9,8 +9,7 @@ module Main where
 
 import ClassyPrelude.Conduit hiding ((<>))
 import Data.Conduit.Lazy (MonadActive)
-import Data.Conduit.Zlib (gzip)
-import qualified Data.ByteString.Char8 as S8 (pack, unpack)
+import qualified Data.ByteString.Char8 as S8 (pack)
 import Control.Lens (set)
 import Control.Monad (msum)
 import Control.Monad.Trans.AWS (trying, _Error)
@@ -21,13 +20,13 @@ import Network.AWS.S3
        (ObjectCannedACL(OPublicRead), BucketName(BucketName),
         ObjectKey(ObjectKey), poACL, putObject)
 import Network.AWS.Data.Body (toBody)
+import Network.HTTP.Client (parseUrlThrow)
 import Network.HTTP.Simple
        (Request, parseRequest, addRequestHeader, getResponseStatus,
-        getResponseStatusCode, getResponseHeader)
+        getResponseStatusCode, getResponseHeader, getResponseBody, httpLBS)
 import Options.Applicative
 import System.Environment (getEnv, lookupEnv)
 import System.IO (BufferMode(LineBuffering), hSetBuffering, stdout)
-import System.IO.Temp (withSystemTempDirectory)
 
 import Stackage.Package.Update
 import Stackage.Package.Locations
@@ -77,28 +76,38 @@ getReposInfo path account gitUser = do
 
 -- | Upload an oldstyle '00-index.tar.gz' (i.e. without package.json files) to
 -- an S3 bucket.
-updateIndex00 :: Credentials -> BucketName -> GitRepository -> IO ()
-updateIndex00 awsCreds bucketName GitRepository {repoInfo = GitInfo {gitTagName = Just tagName
-                                                                    ,..}} = do
-  env <- newEnv NorthVirginia awsCreds
+updateIndex00 :: Credentials -> BucketName -> IO ()
+updateIndex00 awsCreds bucketName = do
+  {-
+  No longer works since 00-index.tar.gz is being modified. But
+  thankfully we can finally securely download the file, since
+  Hackage Origin has HTTPS available! See:
+  https://github.com/haskell/cabal/issues/4624#issuecomment-325030373
+
+  GitRepository {repoInfo = GitInfo {gitTagName = Just tagName
   withSystemTempDirectory
     "00-index"
     (\tmpDir -> do
+
        let indexFP = tmpDir </> "00-index.tar"
        run
          gitLocalPath
          "git"
          ["archive", S8.unpack tagName, "--format", "tar", "-o", indexFP]
        index00 <- runResourceT $ (sourceFile indexFP =$= gzip $$ foldC)
-       let key = ObjectKey "00-index.tar.gz"
-           po =
-             set poACL (Just OPublicRead) $
-             putObject bucketName key (toBody index00)
-       eres <- runResourceT $ runAWS env $ trying _Error $ send po
-       case eres of
-         Left e -> error $ show (key, e)
-         Right _ -> putStrLn "Success")
-updateIndex00 _ _ _ = return ()
+       -}
+
+  env <- newEnv NorthVirginia awsCreds
+  req <- parseUrlThrow "https://hackage-origin.haskell.org/packages/00-index.tar.gz"
+  index00 <- getResponseBody <$> httpLBS req
+  let key = ObjectKey "00-index.tar.gz"
+      po =
+        set poACL (Just OPublicRead) $
+        putObject bucketName key (toBody index00)
+  eres <- runResourceT $ runAWS env $ trying _Error $ send po
+  case eres of
+    Left e -> error $ show (key, e)
+    Right _ -> putStrLn "Success"
 
 processIndexUpdate
   :: (MonadActive m, MonadIO m, MonadMask m, MonadBaseControl IO m)
@@ -236,7 +245,7 @@ main = do
             do pushRepos repos commitMessage
                case ms3Bucket of
                  Just s3Bucket ->
-                   updateIndex00 oAwsCredentials s3Bucket (allCabalFiles repos)
+                   updateIndex00 oAwsCredentials s3Bucket
                  _ -> return ()
           return mnewEtag
         threadDelay delay
