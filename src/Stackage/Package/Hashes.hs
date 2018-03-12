@@ -19,13 +19,14 @@ import qualified Data.Conduit.List as CL
 import qualified Data.Map as Map
 import qualified Data.Set as Set
 import Distribution.Version (Version)
-import Distribution.Package (PackageName(..))
+import Distribution.Package (PackageName)
 import Network.HTTP.Client.Conduit
-       (HttpException(StatusCodeException), parseRequest,
-        responseCookieJar, responseHeaders, responseStatus)
+       (HttpException (..), HttpExceptionContent (StatusCodeException),
+        parseRequest, responseStatus)
 import Network.HTTP.Simple (httpSink)
 import Network.HTTP.Types (statusCode)
 import System.FilePath (dropExtension)
+import Data.Text.IO (hPutStrLn)
 
 import Stackage.Package.Git
 import Stackage.Package.IndexConduit
@@ -77,7 +78,7 @@ validateHackageHashes :: (MonadIO m, Eq a) =>
                       -> Map Text a -- ^ Map with hashes from all-cabal-hashes
                       -> m Bool
 validateHackageHashes packageName hackageHashesMap packageHashesMap =
-  fmap and $
+  liftIO $ fmap and $
   forM [tshow MD5, tshow SHA256] $ \hashType -> do
     let isValid =
           lookup (toLower hashType) hackageHashesMap ==
@@ -169,20 +170,17 @@ computePackage pkgName pkgVersion = do
            200 -> Just <$> pairSink
            403 -> return Nothing
            _ ->
-             throwM $
-             StatusCodeException
-               (responseStatus resS3)
-               (responseHeaders resS3)
-               (responseCookieJar resS3))
+             throwM $ HttpExceptionRequest s3req $
+             StatusCodeException resS3 mempty)
   hashesHackage <- httpSink hackagereq (const pairSink)
   mValidHashes <-
     case mHashes of
       Just hashes -> do
         if (hashes /= hashesHackage)
           then do
-            hPutStrLn stderr $
+            liftIO $ hPutStrLn stderr $
               "Mismatched hashes between S3 and Hackage: " ++
-              show (pkgFullName, hashes, hashesHackage)
+              tshow (pkgFullName, hashes, hashesHackage)
             return Nothing
           else return $ Just hashes
       Nothing -> do
