@@ -148,6 +148,6 @@ repoWriteObject GitRepository {repoInstance = GitInstance {..}
       exists <- doesFileExist path
       unless exists $
         do createDirectoryIfMissing True (dropFileName path)
-           writeFile path zipped
+           L.writeFile path zipped
     _ -> return ()
   return ref

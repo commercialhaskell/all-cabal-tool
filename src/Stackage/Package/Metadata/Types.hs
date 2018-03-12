@@ -18,11 +18,8 @@ import qualified Data.Map as Map
 import Data.Set (Set)
 import qualified Data.Set as Set
 import Data.Text (Text)
-import Data.Text.Encoding.Error (lenientDecode)
-import qualified Data.Text.Lazy as TL (stripPrefix)
-import Data.Text.Lazy.Encoding (decodeUtf8With)
-import Data.Typeable (Typeable)
 import Distribution.Compiler (CompilerFlavor(GHC))
+import Distribution.License (licenseFromSPDX)
 import Distribution.Package
        (Dependency(..), PackageIdentifier(..), PackageName)
 import Distribution.PackageDescription
@@ -36,8 +33,8 @@ import Distribution.Version
        (VersionRange, intersectVersionRanges, simplifyVersionRange,
         withinRange, Version, mkVersion)
 import Distribution.Types.CondTree (CondBranch (..))
-import Distribution.PackageDescription.Parse
-       (ParseResult(..), parseGenericPackageDescription)
+import Distribution.PackageDescription.Parsec
+       (parseGenericPackageDescription, runParseResult)
 import Stackage.Package.IndexConduit
        (parseDistText, renderDistText)
 import Stackage.Package.Hashes (unDigest)
@@ -154,24 +151,20 @@ parseCabalFile fp lbs =
   , cfAuthor = pack $ author pd
   , cfMaintainer = pack $ maintainer pd
   , cfHomepage = pack $ homepage pd
-  , cfLicenseName = pack $ renderDistText $ license pd
+  , cfLicenseName = pack $ renderDistText $ licenseFromSPDX $ license pd
   , cfDescription = pack $ description pd
   }
   where
     getDeps' = getDeps (getCheckCond gpd)
     pd = packageDescription gpd
     gpd =
-      case parseResult of
-        ParseFailed perr ->
+      case snd $ runParseResult parseResult of
+        Left perr ->
           error $
           "Stackage.Package.Metadata.Types.parseCabalFile: " ++
           "Error parsing cabal file " ++ show fp ++ ": " ++ show perr
-        ParseOk _ gpd' -> gpd'
-    -- https://github.com/haskell/hackage-server/issues/351
-    dropBOM t = fromMaybe t $ TL.stripPrefix (pack "\xFEFF") t
-    parseResult =
-      parseGenericPackageDescription $
-      unpack $ dropBOM $ decodeUtf8With lenientDecode lbs
+        Right gpd' -> gpd'
+    parseResult = parseGenericPackageDescription $ toStrict lbs
 
 
 -- | FIXME these functions should get cleaned up and merged into stackage-common

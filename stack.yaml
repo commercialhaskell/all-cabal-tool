@@ -1,3 +1,4 @@
-resolver: lts-7.3
+resolver: lts-10.9
 extra-deps:
-- Cabal-2.0.0.2
+- Cabal-2.2.0.0@rev:1
+- lens-4.16@rev:3

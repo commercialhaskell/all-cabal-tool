@@ -7,7 +7,7 @@
 {-# LANGUAGE ViewPatterns #-}
 module Main where
 
-import ClassyPrelude.Conduit hiding ((<>))
+import ClassyPrelude.Conduit
 import Data.Conduit.Lazy (MonadActive)
 import qualified Data.ByteString.Char8 as S8 (pack)
 import Control.Lens (set)
@@ -15,7 +15,7 @@ import Control.Monad (msum)
 import Control.Monad.Trans.AWS (trying, _Error)
 import Network.AWS
        (Credentials(Discover, FromKeys), AccessKey(..), SecretKey(..),
-        Region(NorthVirginia), newEnv, runAWS, send)
+        newEnv, runAWS, send)
 import Network.AWS.S3
        (ObjectCannedACL(OPublicRead), BucketName(BucketName),
         ObjectKey(ObjectKey), poACL, putObject)
@@ -26,7 +26,7 @@ import Network.HTTP.Simple
         getResponseStatusCode, getResponseHeader, getResponseBody, httpLBS)
 import Options.Applicative
 import System.Environment (getEnv, lookupEnv)
-import System.IO (BufferMode(LineBuffering), hSetBuffering, stdout)
+import System.IO (BufferMode(LineBuffering), hSetBuffering, stdout, hPutStrLn)
 
 import Stackage.Package.Update
 import Stackage.Package.Locations
@@ -97,7 +97,7 @@ updateIndex00 awsCreds bucketName = do
        index00 <- runResourceT $ (sourceFile indexFP =$= gzip $$ foldC)
        -}
 
-  env <- newEnv NorthVirginia awsCreds
+  env <- newEnv awsCreds
   req <- parseUrlThrow "https://hackage-origin.haskell.org/packages/00-index.tar.gz"
   index00 <- getResponseBody <$> httpLBS req
   let key = ObjectKey "00-index.tar.gz"

@@ -208,7 +208,7 @@ repoCreateTag repo@GitRepository {repoInstance = GitInstance {..}
       Just key -> signTag gitRepo key tag'
       Nothing -> return tag'
   ref <- repoWriteObject repo (Tag newTag)
-  writeFile (gitLocalPath </> "refs" </> "tags" </> S8.unpack (G.tagBlob newTag)) (show ref)
+  writeFile (gitLocalPath </> "refs" </> "tags" </> S8.unpack (G.tagBlob newTag)) (S8.pack (show ref))
   return $ Just ref
 repoCreateTag _ _ _ = return Nothing
 
