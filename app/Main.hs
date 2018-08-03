@@ -8,7 +8,7 @@
 module Main where
 
 import ClassyPrelude.Conduit
-import Data.Conduit.Lazy (MonadActive)
+import Control.Concurrent (threadDelay)
 import qualified Data.ByteString.Char8 as S8 (pack)
 import Control.Lens (set)
 import Control.Monad (msum)
@@ -26,7 +26,7 @@ import Network.HTTP.Simple
         getResponseStatusCode, getResponseHeader, getResponseBody, httpLBS)
 import Options.Applicative
 import System.Environment (getEnv, lookupEnv)
-import System.IO (BufferMode(LineBuffering), hSetBuffering, stdout, hPutStrLn)
+import System.IO (hPutStrLn)
 
 import Stackage.Package.Update
 import Stackage.Package.Locations
@@ -110,12 +110,12 @@ updateIndex00 awsCreds bucketName = do
     Right _ -> putStrLn "Success"
 
 processIndexUpdate
-  :: (MonadActive m, MonadIO m, MonadMask m, MonadBaseControl IO m)
+  :: MonadIO m
   => Repositories
   -> Request -- ^ Request that should be processed
   -> Maybe ByteString -- ^ Previous Etag, so we can check if the content has changed.
   -> m (Bool, Maybe ByteString)
-processIndexUpdate repos indexReq mLastEtag = do
+processIndexUpdate repos indexReq mLastEtag = liftIO $ do
   let indexReqWithEtag =
         maybe id (addRequestHeader "if-none-match") mLastEtag indexReq
   mValidVersionsWithEtag <-

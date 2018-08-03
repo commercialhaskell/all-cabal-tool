@@ -33,7 +33,7 @@ saveDeprecated :: [(GitRepository, FilePath)] -> IO ()
 saveDeprecated repos = do
   deprecatedJsonReq <- parseRequest hackageDeprecatedUrl
   edeprecated <- getResponseBody <$> httpJSONEither deprecatedJsonReq
-  deprecated <- either throwM return edeprecated :: IO [Deprecation]
+  deprecated <- either throwIO return edeprecated :: IO [Deprecation]
   forM_
     repos
     (\(repo, filename) -> do
@@ -65,7 +65,7 @@ entryUpdateFile _ _ _ = return ()
 -- from returned map. Hash values for new packages are generated and added to
 -- hashes repo.
 allHashesUpdate
-  :: (MonadIO m, MonadMask m, PrimMonad base, MonadBase base m)
+  :: (MonadUnliftIO m, PrimMonad m)
   => Repositories -> Sink Tar.Entry m (Map PackageName (Set Version))
 allHashesUpdate Repositories {..} = do
   indexFileEntryConduit =$= sinkPackageHashes allCabalHashes
@@ -74,7 +74,7 @@ allHashesUpdate Repositories {..} = do
 -- | Main `Sink` that uses entries from the 01-index.tar.gz file to update all
 -- relevant files in all three repos.
 allCabalUpdate
-  :: (MonadIO m, MonadMask m, PrimMonad base, MonadBase base m)
+  :: (MonadUnliftIO m, PrimMonad m)
   => Repositories
   -> Map PackageName (Set Version)
   -> Sink Tar.Entry m ()

@@ -38,7 +38,7 @@ import Stackage.Package.Locations
 -- downloaded, hashes are computed and compared to ones in 'package.json' file.
 -- Returned is a map with all packages and their valid versions.
 sinkPackageHashes
-  :: (MonadIO m, MonadMask m)
+  :: MonadIO m
   => GitRepository
   -> Consumer IndexEntry m (Map PackageName (Set Version))
 sinkPackageHashes hashesRepo = CL.foldM updateHashes Map.empty
@@ -96,7 +96,7 @@ validateHackageHashes packageName hackageHashesMap packageHashesMap =
 -- | If json file with package hashes is missing or corrupt (not parsable) it
 -- downloads the taralls with source code and saves their the hashes.
 createHashesIfMissing
-  :: (MonadMask m, MonadIO m)
+  :: MonadIO m
   => GitRepository
   -> Map Text Text -- ^ Map with hashes from Hackage
   -> PackageName
@@ -154,11 +154,11 @@ instance FromJSON (Package Maybe) where
        o .:? "package-size"
 
 computePackage
-  :: (MonadMask m, MonadIO m)
+  :: MonadIO m
   => PackageName -- ^ Package name
   -> Version -- ^ Package version
   -> m (Maybe (Package Identity))
-computePackage pkgName pkgVersion = do
+computePackage pkgName pkgVersion = liftIO $ do
   putStrLn $ "Computing package information for: " ++ pack pkgFullName
   s3req <- parseRequest s3url
   hackagereq <- parseRequest hackageurl
@@ -170,7 +170,7 @@ computePackage pkgName pkgVersion = do
            200 -> Just <$> pairSink
            403 -> return Nothing
            _ ->
-             throwM $ HttpExceptionRequest s3req $
+             throwIO $ HttpExceptionRequest s3req $
              StatusCodeException resS3 mempty)
   hashesHackage <- httpSink hackagereq (const pairSink)
   mValidHashes <-

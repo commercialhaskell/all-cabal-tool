@@ -48,7 +48,7 @@ import Stackage.Package.Git
 -- returned. That function also allows to return any value that depends on a
 -- `Response`.
 httpTarballSink
-  :: (MonadMask m, MonadIO m)
+  :: MonadUnliftIO m
   => Request -- ^ Request to the tarball file.
   -> Bool -- ^ Is the tarball gzipped?
   -> (Response () -> Sink Tar.Entry m a) -- ^ The sink of how entries in the tar file should be
@@ -69,11 +69,11 @@ httpTarballSink req isCompressed tarSink = do
 
 
 sourceEntries
-  :: (MonadThrow m, Exception e)
+  :: (MonadIO m, Exception e)
   => Tar.Entries e -> Producer m Tar.Entry
 sourceEntries Tar.Done = return ()
 sourceEntries (Tar.Next e rest) = yield e >> sourceEntries rest
-sourceEntries (Tar.Fail e) = throwM e
+sourceEntries (Tar.Fail e) = throwIO e
 
 
 -- | Any file from "01-index.tar.gz"
@@ -143,11 +143,11 @@ getCabalFilePath (renderDistText -> pkgName) (renderDistText -> pkgVersion) =
 
 -- | A conduit that converts every tar entry of interest into `IndexEntry`.
 indexFileEntryConduit
-  :: (MonadBase base m, PrimMonad base, MonadThrow m)
+  :: MonadIO m
   => Conduit Tar.Entry m IndexEntry
 indexFileEntryConduit = CL.mapMaybeM getIndexFileEntry
   where
-    getIndexFileEntry e@(Tar.entryContent -> Tar.NormalFile lbs sz) = do
+    getIndexFileEntry e@(Tar.entryContent -> Tar.NormalFile lbs sz) = liftIO $ do
       case (toPkgVer $ Tar.entryPath e) of
         Just (pkgName, Nothing, "preferred-versions") ->
           case mpkgVersionRange of

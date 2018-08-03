@@ -339,7 +339,8 @@ runPipe
   -> LByteString -- ^ @stdin@
   -> IO (LByteString, LByteString)
 runPipe dir cmd args input =
-  runPipeWithConduit dir cmd args (sourceLazy input) sinkLazyBuilder sinkLazyBuilder
+  (L.fromChunks *** L.fromChunks) <$>
+  runPipeWithConduit dir cmd args (sourceLazy input) sinkList sinkList
 
 
 -- | Run an external process, pipe @stdin@ to it and sink @stdout@ and

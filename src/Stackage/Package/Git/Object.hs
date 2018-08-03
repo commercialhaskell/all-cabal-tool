@@ -40,7 +40,7 @@ data GitObject
 -- | Marshalls a bytestring into a git blob object, computes its SHA1,
 -- compresses it and returns a `GitFile` that is of type `NonExecFile`.
 makeGitFile
-  :: (MonadThrow m, PrimMonad base, MonadBase base m)
+  :: (MonadThrow m, PrimMonad m)
   => LByteString -- ^ Content of the blob.
   -> Word64 -- ^ Size of the content.
   -> m GitFile
@@ -121,7 +121,7 @@ srcWithHeader oType oContent oSize = do
 
 
 compressSink
-  :: (MonadBase base m, PrimMonad base, MonadThrow m)
+  :: (PrimMonad m, MonadThrow m)
   => Consumer ByteString m ByteString
 compressSink = compress 1 defaultWindowBits =$= foldC
 
