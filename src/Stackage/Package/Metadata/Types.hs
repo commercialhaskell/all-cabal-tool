@@ -19,7 +19,6 @@ import Data.Set (Set)
 import qualified Data.Set as Set
 import Data.Text (Text)
 import Distribution.Compiler (CompilerFlavor(GHC))
-import Distribution.License (licenseFromSPDX)
 import Distribution.Package
        (Dependency(..), PackageIdentifier(..), PackageName)
 import Distribution.PackageDescription
@@ -28,6 +27,7 @@ import Distribution.PackageDescription
         condBenchmarks, condExecutables, condLibrary, condTestSuites,
         description, genPackageFlags, homepage, license, maintainer,
         package, packageDescription, synopsis)
+import Distribution.Pretty (prettyShow)
 import Distribution.System (Arch(X86_64), OS(Linux))
 import Distribution.Version
        (VersionRange, intersectVersionRanges, simplifyVersionRange,
@@ -151,7 +151,7 @@ parseCabalFile fp lbs =
   , cfAuthor = pack $ author pd
   , cfMaintainer = pack $ maintainer pd
   , cfHomepage = pack $ homepage pd
-  , cfLicenseName = pack $ renderDistText $ licenseFromSPDX $ license pd
+  , cfLicenseName = pack $ prettyShow $ license pd
   , cfDescription = pack $ description pd
   }
   where
