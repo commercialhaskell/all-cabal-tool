@@ -1,3 +1,8 @@
-resolver: lts-11.19
+resolver: lts-13.0
 extra-deps:
-- Cabal-2.2.0.1@rev:0
+- github: snoyberg/hit
+  commit: 8cceba2b97d749978b1157eb56232f87429842a4
+  sha256: b71b9f497d6b102858fbc72ad269eff13014cf2c3b5911795830c30954f82640
+  size: 51930
+
+- patience-0.2.0.0@sha256:b076f6fa8199d908b2961258918ff27561ee5edd47ab74ad88e3e76d6f022290,1077
