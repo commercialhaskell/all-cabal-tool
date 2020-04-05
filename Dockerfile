@@ -1,6 +1,6 @@
 FROM fpco/pid1:18.04
 
-RUN apt-get update && apt-get install -y ca-certificates libgmp-dev netbase openssh-client git gpg
+RUN apt-get update && apt-get install -y ca-certificates libgmp-dev netbase openssh-client git gpg curl
 
 COPY run.sh /usr/local/bin/run.sh
 
