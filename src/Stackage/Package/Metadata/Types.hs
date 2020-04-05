@@ -192,7 +192,7 @@ getDeps checkCond = goTree
   where
     goTree (CondNode _data deps comps) =
       combineDeps $
-      map (\(Dependency name range) -> Map.singleton name range) deps ++
+      map (\(Dependency name range _) -> Map.singleton name range) deps ++
       map goComp comps
     goComp (CondBranch cond yes no)
       | checkCond cond = goTree yes

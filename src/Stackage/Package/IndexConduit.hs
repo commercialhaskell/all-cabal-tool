@@ -20,6 +20,7 @@ module Stackage.Package.IndexConduit
   ) where
 
 import ClassyPrelude.Conduit
+import Control.Monad.Fail
 import qualified Codec.Archive.Tar as Tar
 import Data.Aeson as A
 import Data.Aeson.Types as A hiding (parse)
@@ -30,9 +31,7 @@ import Data.Conduit.Lazy (lazyConsume)
 import Data.Conduit.Zlib
 import Data.Foldable (msum)
 import Distribution.Version (Version)
-import Distribution.Compat.ReadP (readP_to_S)
 import Distribution.Package (PackageName)
-import Distribution.Text (disp, parse)
 import Distribution.Version (VersionRange, anyVersion)
 import qualified Distribution.Text
 import Network.HTTP.Client.Conduit
@@ -40,6 +39,8 @@ import Text.PrettyPrint (render)
 import qualified Network.HTTP.Client as H
 import qualified Network.HTTP.Client.TLS as H
 import Stackage.Package.Git
+import qualified Distribution.Pretty
+import qualified Distribution.Parsec as Parsec
 
 -- | Download a tarball from a webserver, decompress, parse it and handle it
 -- using a provided `Sink`. Using a conditional function it is possible to
@@ -229,17 +230,17 @@ indexFileEntryConduit = CL.mapMaybeM getIndexFileEntry
 
 
 parseDistText
-  :: (Monad m, Distribution.Text.Text t)
+  :: (MonadFail m, Parsec.Parsec t)
   => String -> m t
 parseDistText s =
-  case map fst $ filter (null . snd) $ readP_to_S parse s of
-    [x] -> return x
-    _ -> fail $ "Could not parse: " ++ s
+  case Parsec.simpleParsec s of
+    Just x -> pure x
+    Nothing -> fail $ "Could not parse: " ++ s
 
 renderDistText
-  :: Distribution.Text.Text t
+  :: Distribution.Pretty.Pretty t
   => t -> String
-renderDistText = render . disp
+renderDistText = Distribution.Pretty.prettyShow
 
 -- | Generates 'pkgname-version' string.
 getPackageFullName :: PackageName -> Version -> String
