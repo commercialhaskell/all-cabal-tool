@@ -1,4 +1,6 @@
-FROM fpco/stack-run:lts-7
+FROM fpco/pid1:18.04
+
+RUN apt-get update && apt-get install -y ca-certificates libgmp-dev netbase openssh-client git gpg
 
 COPY run.sh /usr/local/bin/run.sh
 
