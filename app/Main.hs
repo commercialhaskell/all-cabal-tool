@@ -12,14 +12,12 @@ import Control.Concurrent (threadDelay)
 import qualified Data.ByteString.Char8 as S8 (pack)
 import Control.Lens (set)
 import Control.Monad (msum)
-import Control.Monad.Trans.AWS (trying, _Error)
-import Network.AWS
-       (Credentials(Discover, FromKeys), AccessKey(..), SecretKey(..),
-        newEnv, runAWS, send)
-import Network.AWS.S3
-       (ObjectCannedACL(OPublicRead), BucketName(BucketName),
-        ObjectKey(ObjectKey), poACL, putObject)
-import Network.AWS.Data.Body (toBody)
+import Amazonka
+       (AccessKey(..), SecretKey(..), Env, EnvNoAuth,
+        newEnv, send, trying, _Error, toBody, discover)
+import Amazonka.Auth (fromKeys)
+import Amazonka.S3.PutObject
+import Amazonka.S3 (BucketName(..), ObjectKey(..), ObjectCannedACL(..))
 import Network.HTTP.Client (parseUrlThrow)
 import Network.HTTP.Simple
        (Request, parseRequest, addRequestHeader, getResponseStatus,
@@ -76,8 +74,8 @@ getReposInfo path account gitUser = do
 
 -- | Upload an oldstyle '00-index.tar.gz' (i.e. without package.json files) to
 -- an S3 bucket.
-updateIndex00 :: Credentials -> BucketName -> IO ()
-updateIndex00 awsCreds bucketName = do
+updateIndex00 :: AwsDiscoverMechanism -> BucketName -> IO ()
+updateIndex00 awsMech bucketName = do
   {-
   No longer works since 00-index.tar.gz is being modified. But
   thankfully we can finally securely download the file, since
@@ -97,14 +95,14 @@ updateIndex00 awsCreds bucketName = do
        index00 <- runResourceT $ (sourceFile indexFP =$= gzip $$ foldC)
        -}
 
-  env <- newEnv awsCreds
+  env <- newEnv awsMech
   req <- parseUrlThrow "https://hackage-origin.haskell.org/packages/00-index.tar.gz"
   index00 <- getResponseBody <$> httpLBS req
   let key = ObjectKey "00-index.tar.gz"
       po =
-        set poACL (Just OPublicRead) $
-        putObject bucketName key (toBody index00)
-  eres <- runResourceT $ runAWS env $ trying _Error $ send po
+        set putObject_acl (Just ObjectCannedACL_Public_read) $
+        newPutObject bucketName key (toBody index00)
+  eres <- runResourceT $ trying _Error $ send env po
   case eres of
     Left e -> error $ show (key, e)
     Right _ -> putStrLn "Success"
@@ -144,7 +142,7 @@ processIndexUpdate repos indexReq mLastEtag = liftIO $ do
 
 
 
-type AWSInfo = (BucketName, Maybe Credentials)
+type AwsDiscoverMechanism = EnvNoAuth -> IO Env
 
 data Options = Options
                { oUsername :: String
@@ -154,13 +152,13 @@ data Options = Options
                , oGithubAccount :: String -- default "commercialhaskell"
                , oDelay :: Maybe Int -- default 60 seconds
                , oS3Bucket :: Maybe BucketName
-               , oAwsCredentials :: Credentials
+               , oAwsDiscoveryMech :: AwsDiscoverMechanism
                }
 
 
-awsCredentialsParser :: Parser Credentials
+awsCredentialsParser :: Parser AwsDiscoverMechanism
 awsCredentialsParser =
-  FromKeys <$>
+  (\a s -> pure . fromKeys a s) <$>
   ((AccessKey . S8.pack) <$>
    strOption
      (long "aws-access-key" <>
@@ -173,7 +171,7 @@ awsCredentialsParser =
       help
         ("Secret key for uploading 00-index.tar.gz " ++
          "(Default is $AWS_SECRET_KEY_ID environment variable)")))
-  <|> pure Discover
+  <|> pure discover
 
 
 optionsParser :: Parser Options
@@ -210,7 +208,7 @@ optionsParser =
              "If none, uploading will be skipped. " ++
              "(Default is $S3_BUCKET environment variable)"))))) <*>
   awsCredentialsParser <*
-  abortOption ShowHelpText (long "help" <> help "Display this help text.")
+  abortOption (ShowHelpText Nothing) (long "help" <> help "Display this help text.")
 
 
 
@@ -245,7 +243,7 @@ main = do
             do pushRepos repos commitMessage
                case ms3Bucket of
                  Just s3Bucket ->
-                   updateIndex00 oAwsCredentials s3Bucket
+                   updateIndex00 oAwsDiscoveryMech s3Bucket
                  _ -> return ()
           return mnewEtag
         threadDelay delay

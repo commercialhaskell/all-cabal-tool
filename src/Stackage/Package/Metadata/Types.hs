@@ -23,12 +23,13 @@ import Distribution.Package
        (Dependency(..), PackageIdentifier(..), PackageName)
 import Distribution.PackageDescription
        (CondTree(..), Condition(..), ConfVar(..),
-        Flag(flagName, flagDefault), GenericPackageDescription, author,
+        PackageFlag(flagName, flagDefault), GenericPackageDescription, author,
         condBenchmarks, condExecutables, condLibrary, condTestSuites,
         description, genPackageFlags, homepage, license, maintainer,
         package, packageDescription, synopsis)
 import Distribution.Pretty (prettyShow)
 import Distribution.System (Arch(X86_64), OS(Linux))
+import Distribution.Utils.ShortText (fromShortText)
 import Distribution.Version
        (VersionRange, intersectVersionRanges, simplifyVersionRange,
         withinRange, Version, mkVersion)
@@ -134,12 +135,14 @@ data CabalFile = CabalFile
   }
 
 
+shortTextKey = fromString . fromShortText
+
 parseCabalFile :: FilePath -> LByteString -> CabalFile
 parseCabalFile fp lbs =
   CabalFile
   { cfPackage = package pd
   , cfHash = unDigest SHA256 $ hashlazy lbs
-  , cfSynopsis = pack $ synopsis pd
+  , cfSynopsis = shortTextKey $ synopsis pd
   , cfBasicDeps =
     combineDeps $
     maybe id ((:) . getDeps') (condLibrary gpd) $
@@ -148,11 +151,11 @@ parseCabalFile fp lbs =
     combineDeps $
     map (getDeps' . snd) (condTestSuites gpd) ++
     map (getDeps' . snd) (condBenchmarks gpd)
-  , cfAuthor = pack $ author pd
-  , cfMaintainer = pack $ maintainer pd
-  , cfHomepage = pack $ homepage pd
-  , cfLicenseName = pack $ prettyShow $ license pd
-  , cfDescription = pack $ description pd
+  , cfAuthor = shortTextKey $ author pd
+  , cfMaintainer = shortTextKey $ maintainer pd
+  , cfHomepage = shortTextKey $ homepage pd
+  , cfLicenseName = fromString $ prettyShow $ license pd
+  , cfDescription = shortTextKey $ description pd
   }
   where
     getDeps' = getDeps (getCheckCond gpd)
@@ -173,7 +176,7 @@ getCheckCond gpd = go
   where
     go (Var (OS os)) = os == Linux -- arbitrary
     go (Var (Arch arch)) = arch == X86_64 -- arbitrary
-    go (Var (Flag flag)) = fromMaybe False $ Map.lookup flag flags -- arbitrary
+    go (Var (PackageFlag flag)) = fromMaybe False $ Map.lookup flag flags -- arbitrary
     go (Var (Impl flavor range)) = flavor == GHC && ghcVersion `withinRange` range
     go (Lit b) = b
     go (CNot c) = not $ go c

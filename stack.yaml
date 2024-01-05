@@ -1,5 +1,7 @@
-resolver: lts-15.6
+resolver: lts-22.4
 extra-deps:
-- github: snoyberg/hit
-  commit: 458392b74a5a7b3b6a7645821e6ba884baa37e50
+- github: commercialhaskell/hit
+  commit: 1546b0c2a2f56e28b9ed5a1c5bf1a10adcad8b6c
 - patience-0.3@sha256:fe3a2c5b1ac4d3425bad3d1ee0b6bb529b6e74ab41151f8526f26fc8dfa1206b,1252
+nix:
+  packages: [ zlib git ]

@@ -134,7 +134,7 @@ decodeHackageHashes pkgName pkgVersion lbs = do
     hashesParser obj = do
       signed <- obj .: "signed"
       targets <- signed .: "targets"
-      target <- targets .: pack targetKey
+      target <- targets .: fromString targetKey
       parseJSON target
 
 
