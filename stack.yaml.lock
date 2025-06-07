@@ -22,9 +22,23 @@ packages:
       size: 368
   original:
     hackage: patience-0.3@sha256:fe3a2c5b1ac4d3425bad3d1ee0b6bb529b6e74ab41151f8526f26fc8dfa1206b,1252
+- completed:
+    hackage: Cabal-3.12.1.0@sha256:08be296ddd941b3f9be4bd125fbb3e6857f5c707b8d10464f6f1d30c91ca3e5f,13551
+    pantry-tree:
+      sha256: a509c8164a9682e2cbd080ef8446164fbe11a9c5c0f88b61f41094a8167e6a04
+      size: 11798
+  original:
+    hackage: Cabal-3.12.1.0
+- completed:
+    hackage: Cabal-syntax-3.12.1.0@sha256:6dbb06fb08ff77520947fb4c1ef281c9cea5b8dc7fd9a41ad62273fa916cf4b2,7407
+    pantry-tree:
+      sha256: 62e4b1bbdf7fe7d5259f45811e6fd0131823a10a8ec8c5eaf25370d444ac263a
+      size: 11051
+  original:
+    hackage: Cabal-syntax-3.12.1.0
 snapshots:
 - completed:
-    sha256: 8b211c5a6aad3787e023dfddaf7de7868968e4f240ecedf14ad1c5b2199046ca
-    size: 714097
-    url: https://raw.githubusercontent.com/commercialhaskell/stackage-snapshots/master/lts/22/4.yaml
-  original: lts-22.4
+    sha256: 238fa745b64f91184f9aa518fe04bdde6552533d169b0da5256670df83a0f1a9
+    size: 721141
+    url: https://raw.githubusercontent.com/commercialhaskell/stackage-snapshots/master/lts/22/44.yaml
+  original: lts-22.44
