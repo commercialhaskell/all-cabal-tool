@@ -1,9 +1,12 @@
-resolver: lts-22.44
+resolver: lts-22.40
 extra-deps:
+# Not in snapshot.
+# Needs unreleased patch for bytestring compat.
 - github: commercialhaskell/hit
   commit: 1546b0c2a2f56e28b9ed5a1c5bf1a10adcad8b6c
-- patience-0.3@sha256:fe3a2c5b1ac4d3425bad3d1ee0b6bb529b6e74ab41151f8526f26fc8dfa1206b,1252
+# Not in snapshot
+- patience-0.3@sha256:491a8d0bfbffc06311c41dadf225eb96b52a0dd95c089778ac2ba0b13dd58d6e,1558
 - Cabal-3.12.1.0
 - Cabal-syntax-3.12.1.0
 nix:
-  packages: [ zlib git ]
+  shell-file: shell-stack.nix
