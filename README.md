@@ -25,3 +25,54 @@ upload of `00-index.tar.gz`, which is still the type of file used by `cabal`,
 Hackage hash values generated for every package are validated by
 `hackage-mirror-tool` and `all-cabal-tool`, therefore it can be considered
 unaltered and totally secure.
+
+
+## Developing the package
+
+The package can be built with stack and nix (and with cabal, from within the nix
+shell).
+
+* `stack build`
+* `nix build`
+* `nix develop` --> `cabal build`
+
+### Updating dependencies
+
+Kind of a pain.
+
+We want all build systems to use the same dependencies.
+
+The main set of dependencies comes from the Stackage snapshot specified in
+stack.yaml.
+
+We rely on some unreleased versions of packages, however. This are easily
+handled in stack.yaml. To get the nix build, we use cabal2nix to define the
+sources.
+
+To control cabal2nix, modify `nix/scripts/gen-packages.sh` and run it with `nix
+run .#gen-packages`.
+
+Why would you want to modify gen-packages.sh? When bumping dependencies.
+
+To do that, start with changing the stack snapshot. But you have to synchronize
+the change with the nixpkgs version, as well. This part is done manually. You
+have to find a nixpkgs revision that uses the same snapshot. It also has to
+*work* with the given snapshot! The last time, our strategy was to choose the
+last commit that used a given LTS.
+
+Search for changes to snapshots by grepping the nixpkgs git log.
+
+#### Example
+
+We were updating to LTS 22.40. After finding the commit that moves *beyond*
+22.40, we picked the previous commit to be our nixpkgs revision.
+
+```
+$ git log --oneline | grep stackage | head -n 1
+ca5dc07d3759 haskellPackages: stackage LTS 22.40 -> LTS 22.43
+$ git show ca5dc07d3759^
+commit 69e7105d5d8bff9e0cb1718d4a76a54aa9210f98
+...
+
+--> Use 69e7105d5d8bff9e0cb1718d4a76a54aa9210f98 as the nixpkgs pin!
+```
