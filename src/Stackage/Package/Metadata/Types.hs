@@ -137,36 +137,39 @@ data CabalFile = CabalFile
 
 shortTextKey = fromString . fromShortText
 
-parseCabalFile :: FilePath -> LByteString -> CabalFile
-parseCabalFile fp lbs =
-  CabalFile
-  { cfPackage = package pd
-  , cfHash = unDigest SHA256 $ hashlazy lbs
-  , cfSynopsis = shortTextKey $ synopsis pd
-  , cfBasicDeps =
-    combineDeps $
-    maybe id ((:) . getDeps') (condLibrary gpd) $
-    map (getDeps' . snd) (condExecutables gpd)
-  , cfTestBenchDeps =
-    combineDeps $
-    map (getDeps' . snd) (condTestSuites gpd) ++
-    map (getDeps' . snd) (condBenchmarks gpd)
-  , cfAuthor = shortTextKey $ author pd
-  , cfMaintainer = shortTextKey $ maintainer pd
-  , cfHomepage = shortTextKey $ homepage pd
-  , cfLicenseName = fromString $ prettyShow $ license pd
-  , cfDescription = shortTextKey $ description pd
-  }
-  where
+parseCabalFile :: FilePath -> LByteString -> Maybe CabalFile
+parseCabalFile fp lbs = do
+  gpd <- mgpd
+  let
     getDeps' = getDeps (getCheckCond gpd)
     pd = packageDescription gpd
-    gpd =
+  Just CabalFile
+    { cfPackage = package pd
+    , cfHash = unDigest SHA256 $ hashlazy lbs
+    , cfSynopsis = shortTextKey $ synopsis pd
+    , cfBasicDeps =
+      combineDeps $
+      maybe id ((:) . getDeps') (condLibrary gpd) $
+      map (getDeps' . snd) (condExecutables gpd)
+    , cfTestBenchDeps =
+      combineDeps $
+      map (getDeps' . snd) (condTestSuites gpd) ++
+      map (getDeps' . snd) (condBenchmarks gpd)
+    , cfAuthor = shortTextKey $ author pd
+    , cfMaintainer = shortTextKey $ maintainer pd
+    , cfHomepage = shortTextKey $ homepage pd
+    , cfLicenseName = fromString $ prettyShow $ license pd
+    , cfDescription = shortTextKey $ description pd
+    }
+  where
+    mgpd =
       case snd $ runParseResult parseResult of
         Left perr ->
-          error $
-          "Stackage.Package.Metadata.Types.parseCabalFile: " ++
-          "Error parsing cabal file " ++ show fp ++ ": " ++ show perr
-        Right gpd' -> gpd'
+          trace
+            ( "Stackage.Package.Metadata.Types.parseCabalFile: " ++
+              "Error parsing cabal file " ++ show fp ++ ": " ++ show perr)
+            Nothing
+        Right gpd' -> Just gpd'
     parseResult = parseGenericPackageDescription $ toStrict lbs
 
 
