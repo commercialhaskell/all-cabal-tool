@@ -89,6 +89,7 @@ test-suite all-cabal-tool-test
   build-depends:       base
                      , all-cabal-tool
                      , bytestring
+                     , hit
                      , QuickCheck
                      , tasty
                      , tasty-quickcheck

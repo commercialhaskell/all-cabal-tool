@@ -9,9 +9,11 @@ import Test.QuickCheck.Monadic (monadicIO, run)
 import Test.Tasty
 import Test.Tasty.QuickCheck
 
+import Data.Git.Ref (Ref, fromBinary, toBinary)
+
 import Stackage.Package.Git.Object (makeGitFile)
-import Stackage.Package.Git.Types (FileName(..), GitFile(..), TreePath)
-import Stackage.Package.Git.WorkTree (emptyWorkTree, insertGitFile, lookupFile)
+import Stackage.Package.Git.Types (FileName(..), GitFile(..), TreePath, toShortRef, fromShortRef)
+import Stackage.Package.Git.WorkTree (emptyWorkTree, insertGitFile, lookupFile, removeGitFile)
 
 -- | Arbitrary instance for FileName.
 -- Generates valid file/directory names (non-empty, no slashes in names).
@@ -171,6 +173,52 @@ prop_insert_lookup (TestTreePath path) (TestContent content) = monadicIO $ do
       result = lookupFile tree path
   return $ fmap gitFileRef result == Just (gitFileRef gitFile)
 
+-- | Insert then remove: looking up a removed file should return Nothing
+prop_insert_remove :: TestTreePath -> TestContent -> Property
+prop_insert_remove (TestTreePath path) (TestContent content) = monadicIO $ do
+  gitFile <- run $ mkTestGitFile content
+  let tree = insertGitFile emptyWorkTree path gitFile
+      tree' = removeGitFile tree path
+      result = lookupFile tree' path
+  return $ case result of
+    Nothing -> True
+    Just _  -> False
+
+-- ShortRef properties
+
+-- | Arbitrary Ref: generate 20 random bytes and convert to Ref
+newtype TestRef = TestRef { unTestRef :: Ref }
+  deriving (Show, Eq)
+
+instance Arbitrary TestRef where
+  arbitrary = do
+    -- SHA1 is 20 bytes
+    bytes <- vectorOf 20 arbitrary
+    return $ TestRef $ fromBinary $ B.pack bytes
+
+  -- Shrink by zeroing bytes from the end, smallest first
+  shrink (TestRef ref) =
+    let bytes = B.unpack $ toBinary ref
+    in [ TestRef $ fromBinary $ B.pack $ take n bytes ++ replicate (20 - n) 0
+       | n <- [0 .. length bytes - 1]
+       ]
+
+-- | ShortRef roundtrip: fromShortRef . toShortRef == id
+prop_shortref_roundtrip :: TestRef -> Property
+prop_shortref_roundtrip (TestRef ref) = monadicIO $ do
+  shortRef <- run $ toShortRef ref
+  let ref' = fromShortRef shortRef
+  return $ ref' == ref
+
+-- GitFile properties
+
+-- | makeGitFile is deterministic: same content produces same ref
+prop_makegitfile_deterministic :: TestContent -> Property
+prop_makegitfile_deterministic (TestContent content) = monadicIO $ do
+  gitFile1 <- run $ mkTestGitFile content
+  gitFile2 <- run $ mkTestGitFile content
+  return $ gitFileRef gitFile1 == gitFileRef gitFile2
+
 main :: IO ()
 main = defaultMain tests
 
@@ -185,5 +233,12 @@ tests = testGroup "all-cabal-tool"
     ]
   , testGroup "WorkTree"
     [ testProperty "insert-lookup roundtrip" prop_insert_lookup
+    , testProperty "insert-remove" prop_insert_remove
+    ]
+  , testGroup "ShortRef"
+    [ testProperty "roundtrip" prop_shortref_roundtrip
+    ]
+  , testGroup "GitFile"
+    [ testProperty "makeGitFile deterministic" prop_makegitfile_deterministic
     ]
   ]
