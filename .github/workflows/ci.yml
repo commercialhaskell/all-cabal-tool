@@ -5,6 +5,11 @@ on:
   push:
     branches: [master]
 
+# cancel previous jobs on the branch
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   nix-build:
     runs-on: ubuntu-latest
