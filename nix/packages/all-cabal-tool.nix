@@ -4,8 +4,9 @@
 , conduit-extra, containers, cryptonite, cryptonite-conduit
 , directory, enclosed-exceptions, filepath, hit, hourglass
 , http-client, http-client-tls, http-conduit, http-types, lens, lib
-, memory, optparse-applicative, pretty, process, resourcet
-, system-filepath, tar, temporary, text, utf8-string, yaml, zlib
+, memory, optparse-applicative, pretty, process, QuickCheck
+, resourcet, system-filepath, tar, tasty, tasty-quickcheck
+, temporary, text, utf8-string, yaml, zlib
 }:
 mkDerivation {
   pname = "all-cabal-tool";
@@ -24,6 +25,10 @@ mkDerivation {
     aeson amazonka amazonka-core amazonka-s3 base bytestring
     classy-prelude-conduit conduit-extra directory http-client
     http-conduit http-types lens optparse-applicative temporary zlib
+  ];
+  testHaskellDepends = [
+    aeson base bytestring containers hit QuickCheck tasty
+    tasty-quickcheck text
   ];
   homepage = "https://github.com/commercialhaskell/all-cabal-tool#readme";
   description = "Update the various all-cabal-* repos";
