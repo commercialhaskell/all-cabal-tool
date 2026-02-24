@@ -37,19 +37,19 @@ instance Arbitrary FileName where
       slash :: Word8
       slash = fromIntegral (fromEnum '/')
 
+  -- Shrink to smaller prefixes, smallest first
   shrink (FileName bs) =
-    [ FileName (SBS.toShort $ B.pack shorter)
-    | let chars = B.unpack $ SBS.fromShort bs
-    , shorter <- shrinkList (const []) chars
-    , not (null shorter)
-    ]
+    let chars = B.unpack $ SBS.fromShort bs
+    in [ FileName (SBS.toShort $ B.pack $ take n chars)
+       | n <- [1 .. length chars - 1]
+       ]
+  -- Shrink to smaller prefixes + slash, smallest first
   shrink (DirectoryName bs) =
-    -- Remove the trailing slash, shrink the name, add slash back
-    [ DirectoryName (SBS.toShort $ B.pack $ shorter ++ [slash])
-    | let chars = init $ B.unpack $ SBS.fromShort bs  -- remove trailing /
-    , shorter <- shrinkList (const []) chars
-    , not (null shorter)
-    ]
+    let chars = B.unpack $ SBS.fromShort bs
+        name = init chars  -- remove trailing /
+    in [ DirectoryName (SBS.toShort $ B.pack $ take n name ++ [slash])
+       | n <- [1 .. length name - 1]
+       ]
     where
       slash :: Word8
       slash = fromIntegral (fromEnum '/')
@@ -92,17 +92,19 @@ instance Arbitrary TestTreePath where
       slash :: Word8
       slash = fromIntegral (fromEnum '/')
 
+  -- Shrink to shorter paths, smallest first
+  -- A valid path must end with a FileName, so we keep the last element
+  -- and shrink by removing directories from the front
   shrink (TestTreePath path) =
-    [ TestTreePath p
-    | p <- shrinkList (const []) path
-    , not (null p)
-    , isValidPath p
-    ]
-    where
-      isValidPath [] = False
-      isValidPath xs = case last xs of
-        FileName _ -> True
-        DirectoryName _ -> False
+    case path of
+      [] -> []
+      [_] -> []  -- Single element, can't shrink further
+      _ ->
+        let file = last path
+            dirs = init path
+        in [ TestTreePath (drop n dirs ++ [file])
+           | n <- [length dirs, length dirs - 1 .. 1]
+           ]
 
 -- FileName properties
 
@@ -146,10 +148,12 @@ instance Arbitrary TestContent where
     bytes <- vectorOf len arbitrary
     return $ TestContent $ B.pack bytes
 
+  -- Shrink to smaller prefixes, smallest (empty) first
   shrink (TestContent bs) =
-    [ TestContent (B.pack shorter)
-    | shorter <- shrinkList (const []) (B.unpack bs)
-    ]
+    let chars = B.unpack bs
+    in [ TestContent (B.pack $ take n chars)
+       | n <- [0 .. length chars - 1]
+       ]
 
 -- | Helper to create a GitFile from ByteString content
 mkTestGitFile :: B.ByteString -> IO GitFile
