@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 #
-# Sync stack.yaml resolver with the LTS version used by nixpkgs.
+# Sync stack.yaml snapshot with the LTS version used by nixpkgs.
 #
 # Usage: nix run .#sync-lts
 #
@@ -51,13 +51,13 @@ fi
 echo "LTS version: $lts_version"
 
 # Update stack.yaml
-current_resolver=$(grep -oP '^resolver: lts-\K[0-9]+\.[0-9]+' stack.yaml || echo "")
+current_snapshot=$(grep -oP '^snapshot: lts-\K[0-9]+\.[0-9]+' stack.yaml || echo "")
 
-if [[ "$current_resolver" == "$lts_version" ]]; then
+if [[ "$current_snapshot" == "$lts_version" ]]; then
     echo "stack.yaml already uses lts-$lts_version"
 else
-    echo "Updating stack.yaml: lts-$current_resolver -> lts-$lts_version"
-    sed -i "s/^resolver: lts-.*/resolver: lts-$lts_version/" stack.yaml
+    echo "Updating stack.yaml: lts-$current_snapshot -> lts-$lts_version"
+    sed -i "s/^snapshot: lts-.*/snapshot: lts-$lts_version/" stack.yaml
 fi
 
 echo "Done!"

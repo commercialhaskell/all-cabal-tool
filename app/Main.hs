@@ -13,8 +13,9 @@ import qualified Data.ByteString.Char8 as S8 (pack)
 import Control.Lens (set)
 import Control.Monad (msum)
 import Amazonka
-       (AccessKey(..), SecretKey(..), Env, EnvNoAuth,
-        newEnv, send, trying, _Error, toBody, discover)
+       (AccessKey(..), SecretKey(..), Env, EnvNoAuth, Error,
+        newEnv, send, toBody, discover)
+import qualified Control.Exception as E
 import Amazonka.Auth (fromKeys)
 import Amazonka.S3.PutObject
 import Amazonka.S3 (BucketName(..), ObjectKey(..), ObjectCannedACL(..))
@@ -102,9 +103,9 @@ updateIndex00 awsMech bucketName = do
       po =
         set putObject_acl (Just ObjectCannedACL_Public_read) $
         newPutObject bucketName key (toBody index00)
-  eres <- runResourceT $ trying _Error $ send env po
+  eres <- E.try $ runResourceT $ send env po
   case eres of
-    Left e -> error $ show (key, e)
+    Left e -> error $ show (key, e :: Error)
     Right _ -> putStrLn "Success"
 
 processIndexUpdate

@@ -1,4 +1,4 @@
-# Update all dependencies: nixpkgs, LTS resolver, and nix package definitions
+# Update all dependencies: nixpkgs, LTS snapshot, and nix package definitions
 update-deps:
     nix flake update
     nix run .#sync-lts
@@ -8,7 +8,7 @@ update-deps:
 update-nixpkgs:
     nix flake update
 
-# Sync stack.yaml resolver with nixpkgs LTS version
+# Sync stack.yaml snapshot with nixpkgs LTS version
 sync-lts:
     nix run .#sync-lts
 

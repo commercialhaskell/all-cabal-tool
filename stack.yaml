@@ -1,4 +1,6 @@
-resolver: lts-24.29
+# DO NOT EDIT SNAPSHOT. It is generated from `just update-deps`.
+snapshot: lts-24.29
+
 extra-deps:
 # Not in snapshot.
 # Needs unreleased patch for bytestring compat.
@@ -8,5 +10,27 @@ extra-deps:
 - patience-0.3@sha256:491a8d0bfbffc06311c41dadf225eb96b52a0dd95c089778ac2ba0b13dd58d6e,1558
 - Cabal-3.14.2.0
 - Cabal-syntax-3.14.2.0
+# Required by amazonka git main
+- microlens-0.5.0.0@sha256:af10ae1d922c543b2ec7cbad0f92ce74572621146404bb341fa0cc016ebb59dc,4762
+- microlens-pro-0.2.0.5@sha256:8c4afe7a696682dadd042c1e323d43ae7361a443c29b4992984d54b374f254c3,3376
+# GHC 9.10 support not yet released; using git main
+- github: brendanhay/amazonka
+  commit: a7d699be1076e2aad05a1930ca3937ffea954ad8
+  subdirs:
+    - lib/amazonka
+    - lib/amazonka-core
+    - lib/services/amazonka-s3
+    - lib/services/amazonka-sso
+    - lib/services/amazonka-sts
+
+allow-newer: true
+allow-newer-deps:
+  - amazonka-core
+  - microlens-contra
+  - microlens-ghc
+  - microlens-mtl
+  - microlens-platform
+  - microlens-th
+
 nix:
   shell-file: shell-stack.nix

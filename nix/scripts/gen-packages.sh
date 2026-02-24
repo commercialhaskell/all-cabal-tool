@@ -18,11 +18,17 @@ gen () {
     fi
 }
 
-cd "$(pwd)"/nix/packages
+cd "$(pwd)"
+
+# Extract amazonka commit from stack.yaml (single source of truth)
+amazonka_commit=$(grep -A1 'github: brendanhay/amazonka' stack.yaml | grep 'commit:' | awk '{print $2}')
+echo "amazonka commit: $amazonka_commit"
+
+cd nix/packages
 
 gen all-cabal-tool ../../.
 
-# Needs unereleased patch.
+# Needs unreleased patch.
 gen hit https://github.com/commercialhaskell/hit
 
 # Not in snapshot
@@ -31,5 +37,12 @@ gen patience cabal://patience
 # Need the latest Cabal file format to support all packages on Hackage
 gen Cabal cabal://Cabal-3.14.2.0
 gen Cabal-syntax cabal://Cabal-syntax-3.14.2.0
+
+# GHC 9.10 support not yet released; using git main
+gen amazonka "https://github.com/brendanhay/amazonka" --revision "$amazonka_commit" --subpath lib/amazonka
+gen amazonka-core "https://github.com/brendanhay/amazonka" --revision "$amazonka_commit" --subpath lib/amazonka-core
+gen amazonka-s3 "https://github.com/brendanhay/amazonka" --revision "$amazonka_commit" --subpath lib/services/amazonka-s3
+gen amazonka-sso "https://github.com/brendanhay/amazonka" --revision "$amazonka_commit" --subpath lib/services/amazonka-sso
+gen amazonka-sts "https://github.com/brendanhay/amazonka" --revision "$amazonka_commit" --subpath lib/services/amazonka-sts
 
 echo "Success!"

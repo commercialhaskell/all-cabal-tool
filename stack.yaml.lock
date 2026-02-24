@@ -36,9 +36,88 @@ packages:
       size: 10977
   original:
     hackage: Cabal-syntax-3.14.2.0
+- completed:
+    hackage: microlens-0.5.0.0@sha256:af10ae1d922c543b2ec7cbad0f92ce74572621146404bb341fa0cc016ebb59dc,4762
+    pantry-tree:
+      sha256: d5211ca01e39d39db3031a20a0ca59ae13872e79358f0c3de9dfea3197bce9a6
+      size: 526
+  original:
+    hackage: microlens-0.5.0.0@sha256:af10ae1d922c543b2ec7cbad0f92ce74572621146404bb341fa0cc016ebb59dc,4762
+- completed:
+    hackage: microlens-pro-0.2.0.5@sha256:8c4afe7a696682dadd042c1e323d43ae7361a443c29b4992984d54b374f254c3,3376
+    pantry-tree:
+      sha256: 6e719bbe246f16168704ed33dc445510e2fedbee309cbf79614376f4aece35c1
+      size: 430
+  original:
+    hackage: microlens-pro-0.2.0.5@sha256:8c4afe7a696682dadd042c1e323d43ae7361a443c29b4992984d54b374f254c3,3376
+- completed:
+    name: amazonka
+    pantry-tree:
+      sha256: 4a71ab03d46bcb9841aaf17cf2473276c91412deae9b4b511a5842059f102d7a
+      size: 1659
+    sha256: 1ee25eb283c2d95fe89c5f559abe0049f6cd0a3b36d768947b85d64ca74d87e0
+    size: 34859547
+    subdir: lib/amazonka
+    url: https://github.com/brendanhay/amazonka/archive/a7d699be1076e2aad05a1930ca3937ffea954ad8.tar.gz
+    version: '2.0'
+  original:
+    subdir: lib/amazonka
+    url: https://github.com/brendanhay/amazonka/archive/a7d699be1076e2aad05a1930ca3937ffea954ad8.tar.gz
+- completed:
+    name: amazonka-core
+    pantry-tree:
+      sha256: 37df1b595ccff0c36abdf11635320dc7feb481872197cd2984c7b9176c3bd9d4
+      size: 3222
+    sha256: 1ee25eb283c2d95fe89c5f559abe0049f6cd0a3b36d768947b85d64ca74d87e0
+    size: 34859547
+    subdir: lib/amazonka-core
+    url: https://github.com/brendanhay/amazonka/archive/a7d699be1076e2aad05a1930ca3937ffea954ad8.tar.gz
+    version: '2.0'
+  original:
+    subdir: lib/amazonka-core
+    url: https://github.com/brendanhay/amazonka/archive/a7d699be1076e2aad05a1930ca3937ffea954ad8.tar.gz
+- completed:
+    name: amazonka-s3
+    pantry-tree:
+      sha256: cab10723dc7e2a3d7096ddd5253e4fc30044ff9a158da24e42bd6be2c4060cdc
+      size: 38690
+    sha256: 1ee25eb283c2d95fe89c5f559abe0049f6cd0a3b36d768947b85d64ca74d87e0
+    size: 34859547
+    subdir: lib/services/amazonka-s3
+    url: https://github.com/brendanhay/amazonka/archive/a7d699be1076e2aad05a1930ca3937ffea954ad8.tar.gz
+    version: '2.0'
+  original:
+    subdir: lib/services/amazonka-s3
+    url: https://github.com/brendanhay/amazonka/archive/a7d699be1076e2aad05a1930ca3937ffea954ad8.tar.gz
+- completed:
+    name: amazonka-sso
+    pantry-tree:
+      sha256: c4575f7b7cf61c3de65e43d0d77a14dfa14c47ebff5f1a3dcd2f6e1313aaaf0a
+      size: 1817
+    sha256: 1ee25eb283c2d95fe89c5f559abe0049f6cd0a3b36d768947b85d64ca74d87e0
+    size: 34859547
+    subdir: lib/services/amazonka-sso
+    url: https://github.com/brendanhay/amazonka/archive/a7d699be1076e2aad05a1930ca3937ffea954ad8.tar.gz
+    version: '2.0'
+  original:
+    subdir: lib/services/amazonka-sso
+    url: https://github.com/brendanhay/amazonka/archive/a7d699be1076e2aad05a1930ca3937ffea954ad8.tar.gz
+- completed:
+    name: amazonka-sts
+    pantry-tree:
+      sha256: e0cb89013938230d257a2e546a78170dfdb6d507f37c6cb763a6cdf6290edb66
+      size: 2880
+    sha256: 1ee25eb283c2d95fe89c5f559abe0049f6cd0a3b36d768947b85d64ca74d87e0
+    size: 34859547
+    subdir: lib/services/amazonka-sts
+    url: https://github.com/brendanhay/amazonka/archive/a7d699be1076e2aad05a1930ca3937ffea954ad8.tar.gz
+    version: '2.0'
+  original:
+    subdir: lib/services/amazonka-sts
+    url: https://github.com/brendanhay/amazonka/archive/a7d699be1076e2aad05a1930ca3937ffea954ad8.tar.gz
 snapshots:
 - completed:
-    sha256: 35f75b07f0b69b3c3e69fe8f034f3be26b3236826b569b7bfdfb9c8aaf651552
-    size: 726797
-    url: https://raw.githubusercontent.com/commercialhaskell/stackage-snapshots/master/lts/24/32.yaml
-  original: lts-24.32
+    sha256: b7dc388c75a62a8a2f1ac753f3bfc3f43a3a2cb58d8a920272cc9a049ff76c62
+    size: 726792
+    url: https://raw.githubusercontent.com/commercialhaskell/stackage-snapshots/master/lts/24/29.yaml
+  original: lts-24.29

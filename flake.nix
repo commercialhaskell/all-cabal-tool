@@ -23,6 +23,12 @@
           Cabal-syntax = hself.callPackage ./nix/packages/Cabal-syntax.nix {};
           # Tests require being run from within the git repo. Disable.
           hit = pkgs.haskell.lib.dontCheck (hself.callPackage ./nix/packages/hit.nix {});
+          # GHC 9.10 support not yet released; using git main
+          amazonka = hself.callPackage ./nix/packages/amazonka.nix {};
+          amazonka-core = hself.callPackage ./nix/packages/amazonka-core.nix {};
+          amazonka-s3 = hself.callPackage ./nix/packages/amazonka-s3.nix {};
+          amazonka-sso = hself.callPackage ./nix/packages/amazonka-sso.nix {};
+          amazonka-sts = hself.callPackage ./nix/packages/amazonka-sts.nix {};
         };
       in final: prev: {
         myHaskellPackages = prev.haskellPackages.override {
@@ -58,7 +64,9 @@
       nativeBuildInputs = [
         pkgs.haskellPackages.ghc
         pkgs.zlib
+        pkgs.glibcLocales
       ];
+      LOCALE_ARCHIVE = "${pkgs.glibcLocales}/lib/locale/locale-archive";
     };
     devShells.x86_64-linux.default = pkgs.myHaskellPackages.shellFor {
       packages = hpkgs: [ hpkgs.all-cabal-tool ] ;
