@@ -1,4 +1,9 @@
 {
+  nixConfig = {
+    extra-substituters = [ "https://stackage-infrastructure.cachix.org" ];
+    extra-trusted-public-keys = [ "stackage-infrastructure.cachix.org-1:R3E1FYE8IKCNbUWCvVhsnlLJ4FC6onEQLhQX2kY0ufQ=" ];
+  };
+
   inputs = {
     nixpkgs.url = "github:nixos/nixpkgs/nixos-unstable";
   };
