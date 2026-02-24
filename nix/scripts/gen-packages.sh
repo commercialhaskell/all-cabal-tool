@@ -29,7 +29,7 @@ gen hit https://github.com/commercialhaskell/hit
 gen patience cabal://patience
 
 # Need the latest Cabal file format to support all packages on Hackage
-gen Cabal cabal://Cabal-3.12.1.0
-gen Cabal-syntax cabal://Cabal-syntax-3.12.1.0
+gen Cabal cabal://Cabal-3.14.2.0
+gen Cabal-syntax cabal://Cabal-syntax-3.14.2.0
 
 echo "Success!"
