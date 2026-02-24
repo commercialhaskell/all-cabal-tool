@@ -3,6 +3,10 @@ module Main where
 
 import qualified Data.ByteString as B
 import qualified Data.ByteString.Short as SBS
+import qualified Data.Set as Set
+import qualified Data.Text as T
+import Data.Aeson (fromJSON, toJSON)
+import qualified Data.Aeson as Aeson
 import Data.Word (Word8)
 import Test.QuickCheck
 import Test.QuickCheck.Monadic (monadicIO, run)
@@ -14,6 +18,7 @@ import Data.Git.Ref (Ref, fromBinary, toBinary)
 import Stackage.Package.Git.Object (makeGitFile)
 import Stackage.Package.Git.Types (FileName(..), GitFile(..), TreePath, toShortRef, fromShortRef)
 import Stackage.Package.Git.WorkTree (emptyWorkTree, insertGitFile, lookupFile, removeGitFile)
+import Stackage.Package.Metadata.Types (Deprecation(..))
 
 -- | Arbitrary instance for FileName.
 -- Generates valid file/directory names (non-empty, no slashes in names).
@@ -184,6 +189,30 @@ prop_insert_remove (TestTreePath path) (TestContent content) = monadicIO $ do
     Nothing -> True
     Just _  -> False
 
+-- | Insert shadowing: second insert at same path overwrites first
+prop_insert_shadow :: TestTreePath -> TestContent -> TestContent -> Property
+prop_insert_shadow (TestTreePath path) (TestContent content1) (TestContent content2) = monadicIO $ do
+  gitFile1 <- run $ mkTestGitFile content1
+  gitFile2 <- run $ mkTestGitFile content2
+  let tree = insertGitFile (insertGitFile emptyWorkTree path gitFile1) path gitFile2
+      result = lookupFile tree path
+  return $ fmap gitFileRef result == Just (gitFileRef gitFile2)
+
+-- | Insert commutativity: inserting at disjoint paths in either order gives same result
+prop_insert_commute :: TestTreePath -> TestTreePath -> TestContent -> TestContent -> Property
+prop_insert_commute (TestTreePath path1) (TestTreePath path2) (TestContent content1) (TestContent content2) =
+  path1 /= path2 ==> monadicIO $ do
+    gitFile1 <- run $ mkTestGitFile content1
+    gitFile2 <- run $ mkTestGitFile content2
+    let tree1 = insertGitFile (insertGitFile emptyWorkTree path1 gitFile1) path2 gitFile2
+        tree2 = insertGitFile (insertGitFile emptyWorkTree path2 gitFile2) path1 gitFile1
+        -- Both trees should have both files with correct refs
+        result1a = fmap gitFileRef $ lookupFile tree1 path1
+        result1b = fmap gitFileRef $ lookupFile tree1 path2
+        result2a = fmap gitFileRef $ lookupFile tree2 path1
+        result2b = fmap gitFileRef $ lookupFile tree2 path2
+    return $ result1a == result2a && result1b == result2b
+
 -- ShortRef properties
 
 -- | Arbitrary Ref: generate 20 random bytes and convert to Ref
@@ -219,6 +248,60 @@ prop_makegitfile_deterministic (TestContent content) = monadicIO $ do
   gitFile2 <- run $ mkTestGitFile content
   return $ gitFileRef gitFile1 == gitFileRef gitFile2
 
+-- Deprecation properties
+
+-- | Arbitrary Text for package names (simple alphanumeric)
+newtype TestText = TestText { unTestText :: T.Text }
+  deriving (Show, Eq)
+
+instance Arbitrary TestText where
+  arbitrary = do
+    len <- choose (1, 30)
+    chars <- vectorOf len $ elements $ ['a'..'z'] ++ ['0'..'9'] ++ ['-']
+    return $ TestText $ T.pack chars
+
+  -- Shrink to smaller prefixes, smallest first
+  shrink (TestText t) =
+    [ TestText (T.take n t)
+    | n <- [1 .. T.length t - 1]
+    ]
+
+-- | Arbitrary Deprecation
+instance Arbitrary Deprecation where
+  arbitrary = do
+    pkg <- unTestText <$> arbitrary
+    numFavours <- choose (0, 5)
+    favours <- Set.fromList . map unTestText <$> vectorOf numFavours arbitrary
+    return $ Deprecation pkg favours
+
+  -- Shrink package name and favour set, smallest first
+  shrink (Deprecation pkg favours) =
+    -- First try empty favours set
+    [ Deprecation pkg Set.empty | not (Set.null favours) ] ++
+    -- Then try shorter package names
+    [ Deprecation (T.take n pkg) favours
+    | n <- [1 .. T.length pkg - 1]
+    ] ++
+    -- Then try smaller favour sets
+    [ Deprecation pkg (Set.deleteAt i favours)
+    | i <- [0 .. Set.size favours - 1]
+    ]
+
+-- | Deprecation JSON roundtrip: fromJSON . toJSON == id
+prop_deprecation_json_roundtrip :: Deprecation -> Bool
+prop_deprecation_json_roundtrip dep =
+  case fromJSON (toJSON dep) of
+    Aeson.Success dep' -> dep' == dep
+    Aeson.Error _      -> False
+
+-- Need Eq and Show instances for Deprecation
+instance Eq Deprecation where
+  d1 == d2 = depPackage d1 == depPackage d2 &&
+             depInFavourOf d1 == depInFavourOf d2
+
+instance Show Deprecation where
+  show d = "Deprecation " ++ show (depPackage d) ++ " " ++ show (depInFavourOf d)
+
 main :: IO ()
 main = defaultMain tests
 
@@ -234,11 +317,16 @@ tests = testGroup "all-cabal-tool"
   , testGroup "WorkTree"
     [ testProperty "insert-lookup roundtrip" prop_insert_lookup
     , testProperty "insert-remove" prop_insert_remove
+    , testProperty "insert-shadow" prop_insert_shadow
+    , testProperty "insert-commute" prop_insert_commute
     ]
   , testGroup "ShortRef"
     [ testProperty "roundtrip" prop_shortref_roundtrip
     ]
   , testGroup "GitFile"
     [ testProperty "makeGitFile deterministic" prop_makegitfile_deterministic
+    ]
+  , testGroup "Deprecation"
+    [ testProperty "JSON roundtrip" prop_deprecation_json_roundtrip
     ]
   ]
