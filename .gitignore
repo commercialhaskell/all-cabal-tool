@@ -4,3 +4,5 @@ all-cabal-files/
 all-cabal-hashes/
 all-cabal-metadata/
 *~
+result
+.dev-profile
