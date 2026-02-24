@@ -53,6 +53,14 @@ jobs:
         with:
           name: stackage-infrastructure
 
+      - name: Cache Stack dependencies
+        uses: actions/cache@v4
+        with:
+          path: ~/.stack
+          key: stack-deps-${{ runner.os }}-${{ hashFiles('stack.yaml', 'stack.yaml.lock', 'all-cabal-tool.cabal') }}
+          restore-keys: |
+            stack-deps-${{ runner.os }}-
+
       - name: Test
         run: nix develop .#stack -c stack test --fast --no-interleaved-output
 
