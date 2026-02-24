@@ -5,10 +5,13 @@ import qualified Data.ByteString as B
 import qualified Data.ByteString.Short as SBS
 import Data.Word (Word8)
 import Test.QuickCheck
+import Test.QuickCheck.Monadic (monadicIO, run)
 import Test.Tasty
 import Test.Tasty.QuickCheck
 
-import Stackage.Package.Git.Types (FileName(..), TreePath)
+import Stackage.Package.Git.Object (makeGitFile)
+import Stackage.Package.Git.Types (FileName(..), GitFile(..), TreePath)
+import Stackage.Package.Git.WorkTree (emptyWorkTree, insertGitFile, lookupFile)
 
 -- | Arbitrary instance for FileName.
 -- Generates valid file/directory names (non-empty, no slashes in names).
@@ -131,6 +134,39 @@ prop_file_dir_equality =
       d = DirectoryName "foo/"
   in property $ f == d
 
+-- WorkTree properties
+
+-- | Arbitrary instance for generating file content for GitFile
+newtype TestContent = TestContent { unTestContent :: B.ByteString }
+  deriving (Show, Eq)
+
+instance Arbitrary TestContent where
+  arbitrary = do
+    len <- choose (0, 100)
+    bytes <- vectorOf len arbitrary
+    return $ TestContent $ B.pack bytes
+
+  shrink (TestContent bs) =
+    [ TestContent (B.pack shorter)
+    | shorter <- shrinkList (const []) (B.unpack bs)
+    ]
+
+-- | Helper to create a GitFile from ByteString content
+mkTestGitFile :: B.ByteString -> IO GitFile
+mkTestGitFile content = do
+  let lbs = B.fromStrict content
+      sz = fromIntegral $ B.length content
+  makeGitFile lbs sz
+
+-- | Insert then lookup roundtrip: inserting a file and looking it up should return the same file
+-- We compare by gitFileRef since GitFile doesn't have an Eq instance.
+prop_insert_lookup :: TestTreePath -> TestContent -> Property
+prop_insert_lookup (TestTreePath path) (TestContent content) = monadicIO $ do
+  gitFile <- run $ mkTestGitFile content
+  let tree = insertGitFile emptyWorkTree path gitFile
+      result = lookupFile tree path
+  return $ fmap gitFileRef result == Just (gitFileRef gitFile)
+
 main :: IO ()
 main = defaultMain tests
 
@@ -142,5 +178,8 @@ tests = testGroup "all-cabal-tool"
     , testProperty "Ord transitive" prop_ord_transitive
     , testProperty "directory sorting quirk" prop_directory_sorting
     , testProperty "file/dir equality" prop_file_dir_equality
+    ]
+  , testGroup "WorkTree"
+    [ testProperty "insert-lookup roundtrip" prop_insert_lookup
     ]
   ]
