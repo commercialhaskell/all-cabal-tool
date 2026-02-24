@@ -1,16 +1,16 @@
 {
   inputs = {
-    nixpkgs.url = "github:nixos/nixpkgs?rev=69e7105d5d8bff9e0cb1718d4a76a54aa9210f98";
+    nixpkgs.url = "github:nixos/nixpkgs/nixos-unstable";
   };
 
   outputs = inputs@{ self, ... }:
   let
     pkgs = import inputs.nixpkgs {
-      system = "x86_64-linux"; overlays = [ self.overlays.all-cabal-tool ];
+      system = "x86_64-linux"; overlays = [ self.overlays.this ];
     };
   in {
 
-    overlays.all-cabal-tool =
+    overlays.this =
       let
         hsOverlay =  pkgs: hself: hsuper: {
           all-cabal-tool = hself.callPackage ./nix/packages/all-cabal-tool.nix {};
@@ -34,6 +34,18 @@
       runtimeInputs = [
         pkgs.cabal-install
         pkgs.cabal2nix
+      ];
+    };
+
+    packages.x86_64-linux.sync-lts = pkgs.writeShellApplication {
+      name = "sync-lts";
+      text = builtins.readFile ./nix/scripts/sync-lts.sh;
+      runtimeInputs = [
+        pkgs.coreutils
+        pkgs.jq
+        pkgs.gh
+        pkgs.gnused
+        pkgs.gnugrep
       ];
     };
 
