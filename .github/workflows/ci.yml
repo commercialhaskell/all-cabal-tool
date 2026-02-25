@@ -62,7 +62,7 @@ jobs:
             stack-deps-${{ runner.os }}-
 
       - name: Test
-        run: nix develop .#stack -c stack test --fast --no-interleaved-output
+        run: stack --nix-pure test --fast --no-interleaved-output
 
   cabal-test:
     runs-on: ubuntu-latest
