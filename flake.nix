@@ -37,7 +37,7 @@
       };
 
     packages.x86_64-linux.default = self.packages.x86_64-linux.all-cabal-tool;
-    packages.x86_64-linux.all-cabal-tool = pkgs.myHaskellPackages.all-cabal-tool;
+    packages.x86_64-linux.all-cabal-tool = pkgs.haskell.lib.justStaticExecutables pkgs.myHaskellPackages.all-cabal-tool;
 
     packages.x86_64-linux.update-deps = pkgs.writeShellApplication {
       name = "update-deps";
