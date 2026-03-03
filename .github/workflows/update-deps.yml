@@ -19,8 +19,6 @@ jobs:
 
       - name: Install Nix
         uses: cachix/install-nix-action@v27
-        with:
-          nix_path: nixpkgs=channel:nixos-unstable
 
       - name: Install just
         uses: extractions/setup-just@v2
@@ -49,7 +47,8 @@ jobs:
           body: |
             Automated dependency update:
             - Updated nixpkgs flake input
-            - Synced stack.yaml resolver with nixpkgs LTS version
+            - Synced stack.yaml snapshot with nixpkgs LTS version
+            - Updated Cabal/Cabal-syntax to latest from Hackage
             - Regenerated nix package definitions
           branch: auto-update-deps
           delete-branch: true
