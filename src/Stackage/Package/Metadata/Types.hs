@@ -15,6 +15,7 @@ import Data.Aeson
        (FromJSON(..), ToJSON(..), object, withObject, (.:), (.=))
 import Data.Map (Map)
 import qualified Data.Map as Map
+import Data.List.NonEmpty (NonEmpty)
 import Data.Set (Set)
 import qualified Data.Set as Set
 import Data.Text (Text)
@@ -27,6 +28,7 @@ import Distribution.PackageDescription
         condBenchmarks, condExecutables, condLibrary, condTestSuites,
         description, genPackageFlags, homepage, license, maintainer,
         package, packageDescription, synopsis)
+import Distribution.Parsec.Error (PError)
 import Distribution.Pretty (prettyShow)
 import Distribution.System (Arch(X86_64), OS(Linux))
 import Distribution.Utils.ShortText (fromShortText)
@@ -137,13 +139,13 @@ data CabalFile = CabalFile
 
 shortTextKey = fromString . fromShortText
 
-parseCabalFile :: FilePath -> LByteString -> Maybe CabalFile
+parseCabalFile :: FilePath -> LByteString -> Either (Maybe Version, NonEmpty PError) CabalFile
 parseCabalFile fp lbs = do
-  gpd <- mgpd
+  gpd <- egpd
   let
     getDeps' = getDeps (getCheckCond gpd)
     pd = packageDescription gpd
-  Just CabalFile
+  Right CabalFile
     { cfPackage = package pd
     , cfHash = unDigest SHA256 $ hashlazy lbs
     , cfSynopsis = shortTextKey $ synopsis pd
@@ -162,14 +164,7 @@ parseCabalFile fp lbs = do
     , cfDescription = shortTextKey $ description pd
     }
   where
-    mgpd =
-      case snd $ runParseResult parseResult of
-        Left perr ->
-          trace
-            ( "Stackage.Package.Metadata.Types.parseCabalFile: " ++
-              "Error parsing cabal file " ++ show fp ++ ": " ++ show perr)
-            Nothing
-        Right gpd' -> Just gpd'
+    egpd = snd $ runParseResult parseResult
     parseResult = parseGenericPackageDescription $ toStrict lbs
 
 
