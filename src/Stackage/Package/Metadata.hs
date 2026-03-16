@@ -94,9 +94,16 @@ updateMetadata Repositories {..} validPackages packageVersions =
             else do
               let packageVersionMax = Set.findMax preferredVersionSetValid
               let cabalFileName = getCabalFilePath packageName packageVersionMax
-              cabalFile <-
+              ecabalFile <-
                 parseCabalFile cabalFileName <$> repoReadFile' allCabalFiles cabalFileName
-              return $ Just (cabalFile, packageName, preferredVersionSetValid)
+              case ecabalFile of
+                Left perr -> do
+                  hPutStrLn stderr $
+                    ( "Stackage.Package.Metadata.Types.parseCabalFile: " ++
+                      "Error parsing cabal file " ++ cabalFileName ++ ": " ++ show perr)
+                  return Nothing
+                Right cabalFile ->
+                  return $ Just (cabalFile, packageName, preferredVersionSetValid)
     CL.unfold fromVersions packageVersions =$= CL.mapMaybeM readCabalFile $$
       CL.mapM_ (updatePackageIfChanged allCabalMetadata)
 
