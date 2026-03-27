@@ -19,7 +19,3 @@ push-cachix:
 # Build with stack
 build-stack:
     stack build
-
-# Enter development shell
-dev:
-    nix develop
