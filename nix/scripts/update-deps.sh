@@ -38,10 +38,12 @@ cabal_result=$(mktemp)
 trap 'rm -f "$lts_result" "$cabal_result"' EXIT
 
 #
-# Step 1: Update flake inputs
+# Step 1: Update cabal and flake inputs
 #
-echo "=== Updating flake inputs ==="
-nix flake update
+echo "=== Updating cabal and flake inputs ==="
+nix flake update &
+cabal update &
+wait || { echo "Failed to update flake or cabal"; exit 1; }
 
 #
 # Step 2: Fetch LTS and Cabal info in parallel
