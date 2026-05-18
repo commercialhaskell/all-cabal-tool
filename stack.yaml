@@ -1,5 +1,5 @@
 # DO NOT EDIT SNAPSHOT. It is generated from `just update-deps`.
-snapshot: lts-24.29
+snapshot: lts-24.34
 
 extra-deps:
 # Not in snapshot.
