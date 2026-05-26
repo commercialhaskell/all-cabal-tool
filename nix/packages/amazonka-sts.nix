@@ -20,5 +20,5 @@ mkDerivation {
   ];
   homepage = "https://github.com/brendanhay/amazonka";
   description = "Amazon Security Token Service SDK";
-  license = lib.licensesSpdx."MPL-2.0";
+  license = lib.licenses.mpl20;
 }
