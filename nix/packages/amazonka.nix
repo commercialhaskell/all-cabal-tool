@@ -26,5 +26,5 @@ mkDerivation {
   ];
   homepage = "https://github.com/brendanhay/amazonka";
   description = "Comprehensive Amazon Web Services SDK";
-  license = lib.licenses.mpl20;
+  license = lib.meta.getLicenseFromSpdxId "MPL-2.0";
 }
