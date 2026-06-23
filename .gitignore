@@ -6,3 +6,4 @@ all-cabal-metadata/
 *~
 result
 .dev-profile
+dist-newstyle
