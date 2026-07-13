@@ -60,6 +60,7 @@
         pkgs.haskellPackages.ghc
         pkgs.zlib
         pkgs.glibcLocales
+        pkgs.cacert
       ];
       LOCALE_ARCHIVE = "${pkgs.glibcLocales}/lib/locale/locale-archive";
     };
