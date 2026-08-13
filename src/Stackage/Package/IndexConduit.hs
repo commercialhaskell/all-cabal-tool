@@ -32,8 +32,6 @@ import Data.Foldable (msum)
 import Distribution.Version (Version)
 import Distribution.Package (PackageName)
 import Distribution.Version (VersionRange, anyVersion)
-import qualified Distribution.Text
-import Text.PrettyPrint (render)
 import Stackage.Package.Git
 import qualified Distribution.Pretty
 import qualified Distribution.Parsec as Parsec

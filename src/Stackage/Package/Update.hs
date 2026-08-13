@@ -9,7 +9,6 @@ module Stackage.Package.Update where
 import ClassyPrelude.Conduit
 import qualified Codec.Archive.Tar as Tar
 import qualified Data.ByteString.Lazy as L
-import Control.Monad.IO.Class (MonadIO(liftIO))
 import Data.Aeson as A (encode)
 import Distribution.Package (PackageName)
 import Distribution.Version (Version)

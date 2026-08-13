@@ -30,7 +30,6 @@ import qualified Filesystem.Path.CurrentOS as P
 import Data.Conduit.Process
        (withCheckedProcessCleanup, sourceProcessWithStreams,
         Inherited(Inherited))
-import ClassyPrelude.Conduit (sourceLazy, sinkLazyBuilder)
 import System.Directory
 import System.Exit
 import System.Process (proc, cwd, showCommandForUser)

@@ -95,7 +95,7 @@ updateMetadata hackage Repositories {..} validPackages packageVersions =
               let packageVersionMax = Set.findMax preferredVersionSetValid
               let cabalFileName = getCabalFilePath packageName packageVersionMax
               ecabalFile <-
-                parseCabalFile cabalFileName <$> repoReadFile' allCabalFiles cabalFileName
+                parseCabalFile <$> repoReadFile' allCabalFiles cabalFileName
               case ecabalFile of
                 Left perr -> do
                   hPutStrLn stderr $
