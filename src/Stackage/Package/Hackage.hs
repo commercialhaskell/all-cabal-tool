@@ -9,10 +9,11 @@ module Stackage.Package.Hackage
   , withHackage
   , checkIndexUpdates
   , indexTarPath
-  , downloadSdist
+  , withSdist
   , sdistLocations
   ) where
 
+import Control.Exception (bracket)
 import Control.Monad (when)
 import Data.Time (UTCTime)
 import Distribution.Package (PackageIdentifier(..))
@@ -21,6 +22,7 @@ import Network.URI (URI)
 import Network.URI.Static (uri)
 import System.Directory (createDirectoryIfMissing, removeFile)
 import System.FilePath ((</>))
+import System.IO (hClose, openBinaryTempFile)
 
 import Hackage.Security.Client
        (HasUpdates(..), KeyId(..), KeyThreshold(..), Repository, bootstrap,
@@ -114,10 +116,24 @@ indexTarPath hackage = do
     Nothing ->
       error "Stackage.Package.Hackage.indexTarPath: no index in the cache"
 
--- | Fetch a source tarball, verifying it against the index metadata.
-downloadSdist :: Hackage -> PackageIdentifier -> FilePath -> IO ()
-downloadSdist hackage pkgId dest =
-  uncheckClientErrors $ downloadPackage' (hackageRepository hackage) pkgId dest
+-- | Fetch a source tarball, verifying it against the index metadata, and hand
+-- its path to an action.
+--
+-- The tarball lands under the cache root because @hackage-security@ moves it
+-- there from a temporary file of its own with a plain rename.
+withSdist :: Hackage -> PackageIdentifier -> (FilePath -> IO a) -> IO a
+withSdist hackage pkgId action = do
+  let tmpDir = toFilePath (cacheRoot (hackageCache hackage)) </> "sdists"
+  createDirectoryIfMissing True tmpDir
+  bracket (newTempFile tmpDir) removeFile $ \dest -> do
+    uncheckClientErrors $
+      downloadPackage' (hackageRepository hackage) pkgId dest
+    action dest
+  where
+    newTempFile dir = do
+      (path, h) <- openBinaryTempFile dir (display pkgId ++ ".tar.gz")
+      hClose h
+      return path
 
 -- | Every mirror's URL for a source tarball, primary server first.
 sdistLocations :: PackageIdentifier -> [String]

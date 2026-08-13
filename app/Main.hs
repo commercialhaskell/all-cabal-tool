@@ -20,14 +20,13 @@ import Amazonka.Auth (fromKeys)
 import Amazonka.S3.PutObject
 import Amazonka.S3 (BucketName(..), ObjectKey(..), ObjectCannedACL(..))
 import Network.HTTP.Client (parseUrlThrow)
-import Network.HTTP.Simple
-       (Request, parseRequest, addRequestHeader, getResponseStatus,
-        getResponseStatusCode, getResponseHeader, getResponseBody, httpLBS)
+import Network.HTTP.Simple (getResponseBody, httpLBS)
 import Options.Applicative
 import System.Environment (getEnv, lookupEnv)
 import System.IO (hPutStrLn)
 
 import Stackage.Package.Update
+import Stackage.Package.Hackage
 import Stackage.Package.Locations
 import Stackage.Package.Git
 import Stackage.Package.IndexConduit
@@ -108,38 +107,26 @@ updateIndex00 awsMech bucketName = do
     Left e -> error $ show (key, e :: Error)
     Right _ -> putStrLn "Success"
 
+-- | Refresh the local index and, if it moved (or a refresh is being forced),
+-- regenerate the repositories from it.
 processIndexUpdate
   :: MonadIO m
-  => Repositories
-  -> Request -- ^ Request that should be processed
-  -> Maybe ByteString -- ^ Previous Etag, so we can check if the content has changed.
-  -> m (Bool, Maybe ByteString)
-processIndexUpdate repos indexReq mLastEtag = liftIO $ do
-  let indexReqWithEtag =
-        maybe id (addRequestHeader "if-none-match") mLastEtag indexReq
-  mValidVersionsWithEtag <-
-    httpTarballSink
-      indexReqWithEtag
-      True
-      (\res ->
-         case getResponseStatusCode res of
-           200 -> do
-             validVersions <- allHashesUpdate repos
-             return $
-               Just (validVersions, listToMaybe $ getResponseHeader "etag" res)
-           304 -> return Nothing
-           _ -> error $ "Unexpected status: " ++ show (getResponseStatus res))
-  case mValidVersionsWithEtag of
-    Nothing -> return (False, mLastEtag)
-    Just (validVersions, mNewEtag) ->
-      httpTarballSink
-        indexReqWithEtag
-        True
-        (\res ->
-           case getResponseStatusCode res of
-             200 -> (True, mNewEtag) <$ allCabalUpdate repos validVersions
-             304 -> return (False, mLastEtag)
-             _ -> error $ "Unexpected status: " ++ show (getResponseStatus res))
+  => Hackage
+  -> Repositories
+  -> UTCTime -- ^ Time to judge index metadata expiry against
+  -> Bool -- ^ Regenerate even when the index is unchanged.
+  -> m Bool
+processIndexUpdate hackage repos now forceUpdate = liftIO $ do
+  hasUpdates <- checkIndexUpdates hackage now
+  case hasUpdates of
+    NoUpdates
+      | not forceUpdate -> return False
+    _ -> do
+      indexPath <- indexTarPath hackage
+      validVersions <-
+        localTarballSink indexPath False (allHashesUpdate hackage repos)
+      localTarballSink indexPath False (allCabalUpdate hackage repos validVersions)
+      return True
 
 
 
@@ -233,29 +220,31 @@ main = do
   when (isNothing ms3Bucket) $
     putStrLn
       "WARNING: No s3-bucket is provided. Uploading of 00-index.tar.gz will be disabled."
-  indexReq <- parseRequest $ mirrorFPComplete ++ "/01-index.tar.gz"
   reposInfoInit <- getReposInfo localPath oGithubAccount gitUser
-  let innerLoop reposInfo mlastEtag = do
-        putStrLn $ "Checking index, etag == " ++ tshow mlastEtag
-        commitMessage <- getCommitMessage
-        (newInfo, mnewEtag) <- withRepositories reposInfo $ \ repos -> do
-          (updated, mnewEtag) <- processIndexUpdate repos indexReq mlastEtag
-          when updated $
-            do pushRepos repos commitMessage
-               case ms3Bucket of
-                 Just s3Bucket ->
-                   updateIndex00 oAwsDiscoveryMech s3Bucket
-                 _ -> return ()
-          return mnewEtag
-        threadDelay delay
-        innerLoop newInfo mnewEtag
-  let outerLoop = do
-        catchAny
-          (innerLoop reposInfoInit Nothing)
-          (\e -> do
-             hPutStrLn stderr $
-               "ERROR: Received an unexpected exception while updating repositories: " ++
-               show e
-             threadDelay delay
-             outerLoop)
-  outerLoop
+  withHackage (localPath </> "hackage-security-cache") $ \hackage -> do
+    let innerLoop reposInfo forceUpdate = do
+          putStrLn "Checking index"
+          now <- getCurrentTime
+          commitMessage <- getCommitMessage
+          (newInfo, ()) <- withRepositories reposInfo $ \ repos -> do
+            updated <- processIndexUpdate hackage repos now forceUpdate
+            when updated $
+              do pushRepos repos commitMessage
+                 case ms3Bucket of
+                   Just s3Bucket ->
+                     updateIndex00 oAwsDiscoveryMech s3Bucket
+                   _ -> return ()
+          threadDelay delay
+          innerLoop newInfo False
+    let outerLoop = do
+          catchAny
+            -- A fresh process has no idea how far behind the repositories are,
+            -- so the first pass runs whether or not the index moved.
+            (innerLoop reposInfoInit True)
+            (\e -> do
+               hPutStrLn stderr $
+                 "ERROR: Received an unexpected exception while updating repositories: " ++
+                 show e
+               threadDelay delay
+               outerLoop)
+    outerLoop

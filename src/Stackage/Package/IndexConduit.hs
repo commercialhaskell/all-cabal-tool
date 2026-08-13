@@ -10,7 +10,7 @@ module Stackage.Package.IndexConduit
   , getPackageFullName
   , indexFileEntryConduit
   , sourceEntries
-  , httpTarballSink
+  , localTarballSink
   , IndexFile(..)
   , Cabal(..)
   , Versions(..)
@@ -26,47 +26,32 @@ import Data.Aeson as A
 import Data.Aeson.Types as A hiding (parse)
 import qualified Data.ByteString.Lazy as L
 import qualified Data.ByteString.Lazy.Char8 as L8
+import qualified Codec.Compression.GZip as GZip
 import qualified Data.Conduit.List as CL
-import Data.Conduit.Lazy (lazyConsume)
-import Data.Conduit.Zlib
 import Data.Foldable (msum)
 import Distribution.Version (Version)
 import Distribution.Package (PackageName)
 import Distribution.Version (VersionRange, anyVersion)
 import qualified Distribution.Text
-import Network.HTTP.Client.Conduit
 import Text.PrettyPrint (render)
-import qualified Network.HTTP.Client as H
-import qualified Network.HTTP.Client.TLS as H
 import Stackage.Package.Git
 import qualified Distribution.Pretty
 import qualified Distribution.Parsec as Parsec
 
--- | Download a tarball from a webserver, decompress, parse it and handle it
--- using a provided `Sink`. Using a conditional function it is possible to
--- prevent a tarball from being downloaded, for instance in such a case when an
--- unexpected response status was received, in which case `Nothing` will be
--- returned. That function also allows to return any value that depends on a
--- `Response`.
-httpTarballSink
+-- | Parse a tarball on disk and feed its entries to a `Sink`.
+localTarballSink
   :: MonadUnliftIO m
-  => Request -- ^ Request to the tarball file.
+  => FilePath -- ^ Path to the tarball.
   -> Bool -- ^ Is the tarball gzipped?
-  -> (Response () -> Sink Tar.Entry m a) -- ^ The sink of how entries in the tar file should be
-     -- processed.
+  -> Sink Tar.Entry m a -- ^ How entries in the tar file should be processed.
   -> m a
-httpTarballSink req isCompressed tarSink = do
-  man <- liftIO H.getGlobalManager
-  bracket (liftIO $ H.responseOpen req man) (liftIO . H.responseClose) $
-    \res -> do
-      let src' = bodyReaderSource $ H.responseBody res
-          src =
-            if isCompressed
-              then src' =$= ungzip
-              else src'
-          res_ = const () <$> res
-      tarChunks <- liftIO $ lazyConsume src
-      (sourceEntries $ Tar.read $ L.fromChunks tarChunks) $$ tarSink res_
+localTarballSink path isCompressed tarSink = do
+  lbs <- liftIO $ L.readFile path
+  (sourceEntries $ Tar.read $ decompress lbs) $$ tarSink
+  where
+    decompress
+      | isCompressed = GZip.decompress
+      | otherwise = id
 
 
 sourceEntries

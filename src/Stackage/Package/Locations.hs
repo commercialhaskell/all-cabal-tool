@@ -11,9 +11,6 @@ hackageBaseUrl = "https://hackage.haskell.org"
 hackageDeprecatedUrl :: String
 hackageDeprecatedUrl = hackageBaseUrl ++ "/packages/deprecated.json"
 
-mirrorFPComplete :: String
-mirrorFPComplete = "https://s3.amazonaws.com/hackage.fpcomplete.com"
-
 data Repositories = Repositories
   { allCabalFiles :: GitRepository
   , allCabalHashes :: GitRepository

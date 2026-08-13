@@ -23,10 +23,9 @@ import Data.Text.Encoding.Error (lenientDecode)
 import qualified Data.Yaml as Y (decodeEither, encode)
 import Distribution.Package (PackageIdentifier(..), PackageName, unPackageName)
 import Distribution.Version (VersionRange, withinRange, Version)
-import Network.HTTP.Simple
-import Network.HTTP.Types (status200)
 import Prelude hiding (pi)
 import Stackage.Package.Git
+import Stackage.Package.Hackage
 import Stackage.Package.IndexConduit
 import Stackage.Package.Locations
 import Stackage.Package.Metadata.Types
@@ -62,12 +61,13 @@ sinkPackageVersions = CL.fold trackVersions Map.empty
 -- produced by `sinkPackageVersions` and cabal files from the second repo.
 updateMetadata
   :: (MonadIO m)
-  => Repositories -- ^ Repositories
+  => Hackage -- ^ Source of package tarballs
+  -> Repositories -- ^ Repositories
   -> Map PackageName (Set Version) -- ^ Valid package version set.
   -> Map PackageName (Set Version, Maybe VersionRange) -- ^ Packages version
      -- information
   -> m ()
-updateMetadata Repositories {..} validPackages packageVersions =
+updateMetadata hackage Repositories {..} validPackages packageVersions =
   liftIO $ do
     let fromVersions versionsMap
           | Map.null versionsMap = Nothing
@@ -105,12 +105,15 @@ updateMetadata Repositories {..} validPackages packageVersions =
                 Right cabalFile ->
                   return $ Just (cabalFile, packageName, preferredVersionSetValid)
     CL.unfold fromVersions packageVersions =$= CL.mapMaybeM readCabalFile $$
-      CL.mapM_ (updatePackageIfChanged allCabalMetadata)
+      CL.mapM_ (updatePackageIfChanged hackage allCabalMetadata)
 
 updatePackageIfChanged
   :: MonadIO m
-  => GitRepository -> (CabalFile, PackageName, Set Version) -> m ()
-updatePackageIfChanged metadataRepo (cabalFile@CabalFile {..}, packageName, versionSet) =
+  => Hackage
+  -> GitRepository
+  -> (CabalFile, PackageName, Set Version)
+  -> m ()
+updatePackageIfChanged hackage metadataRepo (cabalFile@CabalFile {..}, packageName, versionSet) =
   liftIO $
   do mepi <- fmap (Y.decodeEither . L.toStrict) <$> repoReadFile metadataRepo fp
      case mepi of
@@ -148,34 +151,20 @@ updatePackageIfChanged metadataRepo (cabalFile@CabalFile {..}, packageName, vers
         cabalFileName ++
         " package identifier mismatch: " ++
         show cabalPackageId ++ " /= " ++ (show cfPackage)
-    url =
-      concat
-        [ mirrorFPComplete
-        , "/package/"
-        , pkgNameStr
-        , "-"
-        , pkgVersionStr
-        , ".tar.gz"
-        ]
-    sink res
-      | getResponseStatus res /= status200 = return Nothing
-      | otherwise =
-        fmap Just $ (CL.fold goEntry (cfDescription, "haddock", "", ""))
+    sink = CL.fold goEntry (cfDescription, "haddock", "", "")
     updatePackage = do
       checkCabalFile
-      sdistReq <- parseRequest url
-      result <- httpTarballSink sdistReq True sink
-      case result of
-        Nothing -> putStrLn $ "Skipping: " ++ url
-        Just (desc, desct, cl, clt) -> do
-          putStrLn $
-            "Updating Metadata for package: " ++
-            pkgNameStr ++ " to version: " ++ pkgVersionStr
-          repoWriteFile
-            metadataRepo
-            fp
-            (L.fromStrict . Y.encode $
-             makePackageInfo cabalFile versionSet desc desct cl clt)
+      (desc, desct, cl, clt) <-
+        withSdist hackage (PackageIdentifier packageName pkgVersionMax) $
+        \path -> localTarballSink path True sink
+      putStrLn $
+        "Updating Metadata for package: " ++
+        pkgNameStr ++ " to version: " ++ pkgVersionStr
+      repoWriteFile
+        metadataRepo
+        fp
+        (L.fromStrict . Y.encode $
+         makePackageInfo cabalFile versionSet desc desct cl clt)
     fp =
       "packages" </> (unpack $ toLower $ pack $ take 2 $ pkgNameStr ++ "XX") </>
       pkgNameStr <.>
