@@ -12,6 +12,11 @@ build-type:          Simple
 extra-source-files:  README.md ChangeLog.md
 cabal-version:       >=1.10
 
+flag integration
+  description:       Build the test suite that talks to the live Hackage repository.
+  default:           False
+  manual:            True
+
 library
   hs-source-dirs:      src
   exposed-modules:     Stackage.Package.Hashes
@@ -104,6 +109,21 @@ test-suite all-cabal-tool-test
                      , text
   default-language:    Haskell2010
   ghc-options:         -Wall
+
+test-suite all-cabal-tool-integration
+  type:                exitcode-stdio-1.0
+  hs-source-dirs:      test-integration
+  main-is:             Main.hs
+  build-depends:       base
+                     , Cabal
+                     , all-cabal-tool
+                     , directory
+                     , temporary
+                     , time
+  default-language:    Haskell2010
+  ghc-options:         -Wall
+  if !flag(integration)
+    buildable:         False
 
 source-repository head
   type:     git
