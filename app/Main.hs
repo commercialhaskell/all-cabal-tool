@@ -139,6 +139,7 @@ data Options = Options
                , oLocalPath :: Maybe FilePath -- default $HOME
                , oGithubAccount :: String -- default "commercialhaskell"
                , oDelay :: Maybe Int -- default 60 seconds
+               , oOneShot :: Bool
                , oS3Bucket :: Maybe BucketName
                , oAwsDiscoveryMech :: AwsDiscoverMechanism
                }
@@ -187,6 +188,10 @@ optionsParser =
          help
            ("Delay in seconds before next check for a new version " ++
             "of 01-index.tar.gz file")))) <*>
+  (switch
+     (long "one-shot" <>
+      help
+        ("Update once and exit, instead of polling forever. "))) <*>
   (optional
      ((BucketName . pack) <$>
       (strOption
@@ -222,7 +227,7 @@ main = do
       "WARNING: No s3-bucket is provided. Uploading of 00-index.tar.gz will be disabled."
   reposInfoInit <- getReposInfo localPath oGithubAccount gitUser
   withHackage (localPath </> "hackage-security-cache") $ \hackage -> do
-    let innerLoop reposInfo forceUpdate = do
+    let onePass reposInfo forceUpdate = do
           putStrLn "Checking index"
           now <- getCurrentTime
           commitMessage <- getCommitMessage
@@ -234,6 +239,9 @@ main = do
                    Just s3Bucket ->
                      updateIndex00 oAwsDiscoveryMech s3Bucket
                    _ -> return ()
+          return newInfo
+    let innerLoop reposInfo forceUpdate = do
+          newInfo <- onePass reposInfo forceUpdate
           threadDelay delay
           innerLoop newInfo False
     let outerLoop = do
@@ -247,4 +255,6 @@ main = do
                  show e
                threadDelay delay
                outerLoop)
-    outerLoop
+    if oOneShot
+      then void $ onePass reposInfoInit False
+      else outerLoop
