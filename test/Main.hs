@@ -1,4 +1,5 @@
 {-# LANGUAGE OverloadedStrings #-}
+{-# OPTIONS_GHC -Wno-orphans #-}
 module Main where
 
 import qualified Data.ByteString as B
@@ -293,14 +294,6 @@ prop_deprecation_json_roundtrip dep =
   case fromJSON (toJSON dep) of
     Aeson.Success dep' -> dep' == dep
     Aeson.Error _      -> False
-
--- Need Eq and Show instances for Deprecation
-instance Eq Deprecation where
-  d1 == d2 = depPackage d1 == depPackage d2 &&
-             depInFavourOf d1 == depInFavourOf d2
-
-instance Show Deprecation where
-  show d = "Deprecation " ++ show (depPackage d) ++ " " ++ show (depInFavourOf d)
 
 main :: IO ()
 main = defaultMain tests

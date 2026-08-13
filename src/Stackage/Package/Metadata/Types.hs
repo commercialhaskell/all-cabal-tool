@@ -106,7 +106,7 @@ instance FromJSON PackageInfo where
 data Deprecation = Deprecation
   { depPackage :: !Text
   , depInFavourOf :: !(Set Text)
-  }
+  } deriving (Eq, Show)
 
 instance ToJSON Deprecation where
   toJSON d =
