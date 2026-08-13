@@ -20,7 +20,7 @@ import qualified Data.Set as Set
 import Data.Text (Text, pack, toLower, unpack)
 import Data.Text.Encoding (decodeUtf8With)
 import Data.Text.Encoding.Error (lenientDecode)
-import qualified Data.Yaml as Y (decodeEither, encode)
+import qualified Data.Yaml as Y (decodeEither', encode)
 import Distribution.Package (PackageIdentifier(..), PackageName, unPackageName)
 import Distribution.Version (VersionRange, withinRange, Version)
 import Prelude hiding (pi)
@@ -116,7 +116,7 @@ updatePackageIfChanged
   -> m ()
 updatePackageIfChanged hackage metadataRepo (cabalFile@CabalFile {..}, packageName, versionSet) =
   liftIO $
-  do mepi <- fmap (Y.decodeEither . L.toStrict) <$> repoReadFile metadataRepo fp
+  do mepi <- fmap (Y.decodeEither' . L.toStrict) <$> repoReadFile metadataRepo fp
      case mepi of
        Just (Right pi)
        -- Cabal file is the same and version preference list hasn't changed.
