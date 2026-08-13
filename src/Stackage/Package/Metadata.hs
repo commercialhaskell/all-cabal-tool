@@ -36,7 +36,7 @@ import System.IO (hPutStrLn, stderr)
 -- such are provided.
 sinkPackageVersions
   :: Monad m
-  => Consumer IndexEntry m (Map PackageName (Set Version, Maybe VersionRange))
+  => ConduitT IndexEntry Void m (Map PackageName (Set Version, Maybe VersionRange))
 sinkPackageVersions = CL.fold trackVersions Map.empty
   where
     updateVersionSetMap (newSet, _) (oldSet, moldRange) =
@@ -104,7 +104,8 @@ updateMetadata hackage Repositories {..} validPackages packageVersions =
                   return Nothing
                 Right cabalFile ->
                   return $ Just (cabalFile, packageName, preferredVersionSetValid)
-    CL.unfold fromVersions packageVersions =$= CL.mapMaybeM readCabalFile $$
+    runConduit $
+      CL.unfold fromVersions packageVersions .| CL.mapMaybeM readCabalFile .|
       CL.mapM_ (updatePackageIfChanged hackage allCabalMetadata)
 
 updatePackageIfChanged

@@ -38,7 +38,7 @@ sinkPackageHashes
   :: MonadIO m
   => Hackage
   -> GitRepository
-  -> Consumer IndexEntry m (Map PackageName (Set Version))
+  -> ConduitT IndexEntry Void m (Map PackageName (Set Version))
 sinkPackageHashes hackage hashesRepo = CL.foldM updateHashes Map.empty
   where
     updateHashes versionsMap (PackageEntry IndexFile { ifFile = HackagePackage {..}
@@ -162,7 +162,7 @@ computePackage hackage pkgName pkgVersion = liftIO $ do
   (hashes, size) <-
     withSdist hackage pkgId $ \path -> do
       lbs <- L.readFile path
-      CL.sourceList (L.toChunks lbs) $$ getZipSink pairSink
+      runConduit $ CL.sourceList (L.toChunks lbs) .| getZipSink pairSink
   return
     Package
     { packageHashes = hashes

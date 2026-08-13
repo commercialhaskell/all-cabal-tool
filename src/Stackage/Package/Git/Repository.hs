@@ -349,9 +349,9 @@ runPipeWithConduit
   :: FilePath -- ^ Filepath where process will run.
   -> FilePath -- ^ Path to executable
   -> [String] -- ^ Arguments
-  -> Producer IO ByteString -- ^ @stdin@ producer
-  -> Consumer ByteString IO a -- ^ @stdout@ consumer
-  -> Consumer ByteString IO b -- ^ @stderr@ consumer
+  -> ConduitT () ByteString IO () -- ^ @stdin@ producer
+  -> ConduitT ByteString Void IO a -- ^ @stdout@ consumer
+  -> ConduitT ByteString Void IO b -- ^ @stderr@ consumer
   -> IO (a, b)
 runPipeWithConduit dir cmd args inputSrc stdoutSink stderrSink = do
   putStrLn $

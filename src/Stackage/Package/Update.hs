@@ -69,9 +69,9 @@ allHashesUpdate
   :: (MonadUnliftIO m, PrimMonad m)
   => Hackage
   -> Repositories
-  -> Sink Tar.Entry m (Map PackageName (Set Version))
+  -> ConduitT Tar.Entry Void m (Map PackageName (Set Version))
 allHashesUpdate hackage Repositories {..} = do
-  indexFileEntryConduit =$= sinkPackageHashes hackage allCabalHashes
+  indexFileEntryConduit .| sinkPackageHashes hackage allCabalHashes
 
 
 -- | Main `Sink` that uses entries from the 01-index.tar.gz file to update all
@@ -81,7 +81,7 @@ allCabalUpdate
   => Hackage
   -> Repositories
   -> Map PackageName (Set Version)
-  -> Sink Tar.Entry m ()
+  -> ConduitT Tar.Entry Void m ()
 allCabalUpdate hackage repos@Repositories {..} versionsMap = do
   liftIO $
     saveDeprecated
@@ -91,7 +91,7 @@ allCabalUpdate hackage repos@Repositories {..} versionsMap = do
   -- generate and validate all hashes, while keeping only relevant files
   let hasHashes = containsHashesFor versionsMap
   packageVersions <-
-    indexFileEntryConduit =$=
+    indexFileEntryConduit .|
     (getZipSink
        (ZipSink (CL.mapM_ (entryUpdateFile hasHashes allCabalFiles)) *>
         ZipSink (CL.mapM_ (entryUpdateFile hasHashes allCabalHashes)) *>

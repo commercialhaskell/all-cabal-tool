@@ -47,7 +47,7 @@ makeGitFile
 makeGitFile lbs sz = do
   (sha1, zipped) <-
     runConduit $
-    srcWithHeader "blob" lbs sz =$=
+    srcWithHeader "blob" lbs sz .|
     getZipSink ((,) <$> ZipSink sha1Sink <*> ZipSink compressSink)
   unless (sz == fromIntegral (L.length lbs)) $
     error "Stackage.Package.Git.makeGitFile: Size mismatch."
@@ -122,11 +122,11 @@ srcWithHeader oType oContent oSize = do
 
 compressSink
   :: (PrimMonad m, MonadThrow m)
-  => Consumer ByteString m ByteString
-compressSink = compress 1 defaultWindowBits =$= foldC
+  => ConduitT ByteString Void m ByteString
+compressSink = compress 1 defaultWindowBits .| foldC
 
 
-sha1Sink :: (Monad m) => Consumer ByteString m (Digest SHA1)
+sha1Sink :: (Monad m) => ConduitT ByteString Void m (Digest SHA1)
 sha1Sink = sinkHash
 
 

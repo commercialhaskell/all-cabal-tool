@@ -43,11 +43,11 @@ localTarballSink
   :: MonadUnliftIO m
   => FilePath -- ^ Path to the tarball.
   -> Bool -- ^ Is the tarball gzipped?
-  -> Sink Tar.Entry m a -- ^ How entries in the tar file should be processed.
+  -> ConduitT Tar.Entry Void m a -- ^ How entries in the tar file should be processed.
   -> m a
 localTarballSink path isCompressed tarSink = do
   lbs <- liftIO $ L.readFile path
-  (sourceEntries $ Tar.read $ decompress lbs) $$ tarSink
+  runConduit $ (sourceEntries $ Tar.read $ decompress lbs) .| tarSink
   where
     decompress
       | isCompressed = GZip.decompress
@@ -56,7 +56,7 @@ localTarballSink path isCompressed tarSink = do
 
 sourceEntries
   :: (MonadIO m, Exception e)
-  => Tar.Entries e -> Producer m Tar.Entry
+  => Tar.Entries e -> ConduitT () Tar.Entry m ()
 sourceEntries Tar.Done = return ()
 sourceEntries (Tar.Next e rest) = yield e >> sourceEntries rest
 sourceEntries (Tar.Fail e) = throwIO e
@@ -130,7 +130,7 @@ getCabalFilePath (renderDistText -> pkgName) (renderDistText -> pkgVersion) =
 -- | A conduit that converts every tar entry of interest into `IndexEntry`.
 indexFileEntryConduit
   :: MonadIO m
-  => Conduit Tar.Entry m IndexEntry
+  => ConduitT Tar.Entry IndexEntry m ()
 indexFileEntryConduit = CL.mapMaybeM getIndexFileEntry
   where
     getIndexFileEntry e@(Tar.entryContent -> Tar.NormalFile lbs sz) = liftIO $ do
