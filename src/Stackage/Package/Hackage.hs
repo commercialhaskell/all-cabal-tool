@@ -15,6 +15,7 @@ module Stackage.Package.Hackage
 
 import Control.Exception (bracket)
 import Control.Monad (when)
+import GHC.Stack (HasCallStack)
 import Data.Time (UTCTime)
 import Distribution.Package (PackageIdentifier(..))
 import Distribution.Text (display)
@@ -108,13 +109,12 @@ checkIndexUpdates hackage now =
 
 -- | Location of the uncompressed @01-index.tar@ left behind by
 -- 'checkIndexUpdates'.
-indexTarPath :: Hackage -> IO FilePath
+indexTarPath :: HasCallStack => Hackage -> IO FilePath
 indexTarPath hackage = do
   mpath <- getCachedIndex (hackageCache hackage) FUn
   case mpath of
     Just path -> return (toFilePath path)
-    Nothing ->
-      error "Stackage.Package.Hackage.indexTarPath: no index in the cache"
+    Nothing -> error "no index in the cache"
 
 -- | Fetch a source tarball, verifying it against the index metadata, and hand
 -- its path to an action.

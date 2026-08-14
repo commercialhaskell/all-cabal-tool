@@ -29,6 +29,7 @@ import qualified Data.ByteString.Lazy.Char8 as L8
 import qualified Codec.Compression.GZip as GZip
 import qualified Data.Conduit.List as CL
 import Data.Foldable (msum)
+import GHC.Stack (HasCallStack)
 import Distribution.Version (Version)
 import Distribution.Package (PackageName)
 import Distribution.Version (VersionRange, anyVersion)
@@ -127,7 +128,7 @@ getCabalFilePath (renderDistText -> pkgName) (renderDistText -> pkgVersion) =
 
 -- | A conduit that converts every tar entry of interest into `IndexEntry`.
 indexFileEntryConduit
-  :: MonadIO m
+  :: (HasCallStack, MonadIO m)
   => ConduitT Tar.Entry IndexEntry m ()
 indexFileEntryConduit = CL.mapMaybeM getIndexFileEntry
   where
@@ -177,7 +178,7 @@ indexFileEntryConduit = CL.mapMaybeM getIndexFileEntry
                   case decodeHackageHashes pkgName pkgVersion lbs of
                     Left err ->
                       error $
-                      "Stackage.Hackage.Hashes.entryUpdateHashes: There was an issue parsing: " ++
+                      "There was an issue parsing: " ++
                       Tar.entryPath e ++ ". Parsing error: " ++ err
                     Right parsedHashes -> parsedHashes
         Just (pkgName, Just pkgVersion, _)

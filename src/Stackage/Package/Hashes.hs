@@ -22,6 +22,7 @@ import qualified Data.Set as Set
 import Distribution.Version (Version)
 import Distribution.Package (PackageName)
 import Distribution.Package (PackageIdentifier(..))
+import GHC.Stack (HasCallStack)
 import System.FilePath (dropExtension)
 import Data.Text.IO (hPutStrLn)
 
@@ -95,7 +96,7 @@ validateHackageHashes packageName hackageHashesMap packageHashesMap =
 -- | If json file with package hashes is missing or corrupt (not parsable) it
 -- downloads the taralls with source code and saves their the hashes.
 createHashesIfMissing
-  :: MonadIO m
+  :: (HasCallStack, MonadIO m)
   => Hackage
   -> GitRepository
   -> Map Text Text -- ^ Map with hashes from Hackage

@@ -23,6 +23,7 @@ import Data.Text.Encoding.Error (lenientDecode)
 import qualified Data.Yaml as Y (decodeEither', encode)
 import Distribution.Package (PackageIdentifier(..), PackageName, unPackageName)
 import Distribution.Version (VersionRange, withinRange, Version)
+import GHC.Stack (HasCallStack)
 import Prelude hiding (pi)
 import Stackage.Package.Git
 import Stackage.Package.Hackage
@@ -109,7 +110,7 @@ updateMetadata hackage Repositories {..} validPackages packageVersions =
       CL.mapM_ (updatePackageIfChanged hackage allCabalMetadata)
 
 updatePackageIfChanged
-  :: MonadIO m
+  :: (HasCallStack, MonadIO m)
   => Hackage
   -> GitRepository
   -> (CabalFile, PackageName, Set Version)
@@ -148,7 +149,7 @@ updatePackageIfChanged hackage metadataRepo (cabalFile@CabalFile {..}, packageNa
       let cabalFileName = getCabalFilePath packageName pkgVersionMax
       when (cabalPackageId /= cfPackage) $
         error $
-        "Stackage.Package.Metadata.updateMetadata: Parsed cabal file: " ++
+        "Parsed cabal file: " ++
         cabalFileName ++
         " package identifier mismatch: " ++
         show cabalPackageId ++ " /= " ++ (show cfPackage)

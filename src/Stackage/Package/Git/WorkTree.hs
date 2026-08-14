@@ -24,6 +24,7 @@ import Data.Git.Ref
 import Data.Git.Storage
 import qualified Data.Map.Strict as Map
 import qualified Data.Tree as T
+import GHC.Stack (HasCallStack)
 
 import Stackage.Package.Git.Types
 import Stackage.Package.Git.Object
@@ -54,7 +55,7 @@ emptyWorkTree = Directory () Map.empty
 --
 -- * Naturally, a clash of a directory with a directory will result in their merge.
 --
-insertGitFile :: WorkTree () GitFile -> TreePath -> GitFile -> WorkTree () GitFile
+insertGitFile :: HasCallStack => WorkTree () GitFile -> TreePath -> GitFile -> WorkTree () GitFile
 insertGitFile tree path f = insertFileRec tree path
   where
     insertFileRec _ [] = error "Cannot insert a file without a name"
@@ -69,7 +70,7 @@ insertGitFile tree path f = insertFileRec tree path
 
 
 -- | Returns a file from a work tree if one extst at a supplied path.
-lookupFile :: WorkTree a f -> TreePath -> Maybe f
+lookupFile :: HasCallStack => WorkTree a f -> TreePath -> Maybe f
 lookupFile tree path = getFile $ lookupRec tree path
   where
     getFile (Just (File f _)) = Just f
@@ -83,7 +84,7 @@ lookupFile tree path = getFile $ lookupRec tree path
     lookupRec File {} _ = Nothing
 
 
-removeGitFile :: WorkTree () GitFile -> TreePath -> WorkTree () GitFile
+removeGitFile :: HasCallStack => WorkTree () GitFile -> TreePath -> WorkTree () GitFile
 removeGitFile = removeRec
   where
     removeRec _ [] = error "Cannot remove a file without a name."
@@ -95,7 +96,8 @@ removeGitFile = removeRec
 
 
 -- | Recursively reads current state of the tree.
-readWorkTree :: Git -- ^ Git Repo.
+readWorkTree :: HasCallStack
+             => Git -- ^ Git Repo.
              -> Ref -- ^ Reference for the root tree.
              -> IO (WorkTree ShortRef ShortRef)
 readWorkTree !repo !rootRef = readTreeRec rootRef

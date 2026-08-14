@@ -23,6 +23,7 @@ import Data.Git.Storage
 import Data.Git.Storage.Object
 import Data.Git.Ref
 import Data.Git.Storage.Loose
+import GHC.Stack (HasCallStack)
 import System.Directory
 import System.FilePath
 
@@ -40,7 +41,7 @@ data GitObject
 -- | Marshalls a bytestring into a git blob object, computes its SHA1,
 -- compresses it and returns a `GitFile` that is of type `NonExecFile`.
 makeGitFile
-  :: (MonadThrow m, PrimMonad m)
+  :: (HasCallStack, MonadThrow m, PrimMonad m)
   => LByteString -- ^ Content of the blob.
   -> Word64 -- ^ Size of the content.
   -> m GitFile
@@ -50,7 +51,7 @@ makeGitFile lbs sz = do
     srcWithHeader "blob" lbs sz .|
     getZipSink ((,) <$> ZipSink sha1Sink <*> ZipSink compressSink)
   unless (sz == fromIntegral (L.length lbs)) $
-    error "Stackage.Package.Git.makeGitFile: Size mismatch."
+    error "Size mismatch."
   return $
     GitFile
     { gitFileRef = unDigestRef sha1
