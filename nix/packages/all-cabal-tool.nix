@@ -2,11 +2,11 @@
 { mkDerivation, aeson, amazonka, amazonka-core, amazonka-s3, base
 , byteable, bytestring, Cabal, classy-prelude-conduit, conduit
 , conduit-extra, containers, cryptonite, cryptonite-conduit
-, directory, enclosed-exceptions, filepath, hit, hourglass
-, http-client, http-client-tls, http-conduit, http-types, lens, lib
-, memory, optparse-applicative, pretty, process, QuickCheck
-, resourcet, system-filepath, tar, tasty, tasty-quickcheck
-, temporary, text, utf8-string, yaml, zlib
+, directory, enclosed-exceptions, filepath, hackage-security, hit
+, hourglass, http-client, http-client-tls, http-conduit, http-types
+, lens, lib, memory, network-uri, optparse-applicative, pretty
+, process, QuickCheck, resourcet, system-filepath, tar, tasty
+, tasty-quickcheck, temporary, text, utf8-string, yaml, zlib
 }:
 mkDerivation {
   pname = "all-cabal-tool";
@@ -17,9 +17,10 @@ mkDerivation {
   libraryHaskellDepends = [
     aeson base byteable bytestring Cabal classy-prelude-conduit conduit
     conduit-extra containers cryptonite cryptonite-conduit directory
-    enclosed-exceptions filepath hit hourglass http-client
-    http-client-tls http-conduit http-types memory pretty process
-    resourcet system-filepath tar text utf8-string yaml zlib
+    enclosed-exceptions filepath hackage-security hit hourglass
+    http-client http-client-tls http-conduit http-types memory
+    network-uri pretty process resourcet system-filepath tar text
+    utf8-string yaml zlib
   ];
   executableHaskellDepends = [
     aeson amazonka amazonka-core amazonka-s3 base bytestring
