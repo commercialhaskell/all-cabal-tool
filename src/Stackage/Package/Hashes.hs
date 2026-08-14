@@ -15,22 +15,20 @@ import Data.Aeson
        (FromJSON(..), ToJSON(..), eitherDecode', encode, object,
         withObject, (.:), (.:?), (.=))
 import Data.ByteArray.Encoding (Base(Base16), convertToBase)
+import qualified Data.ByteString.Lazy as L
 import qualified Data.Conduit.List as CL
 import qualified Data.Map as Map
 import qualified Data.Set as Set
 import Distribution.Version (Version)
 import Distribution.Package (PackageName)
-import Network.HTTP.Client.Conduit
-       (HttpException (..), HttpExceptionContent (StatusCodeException),
-        parseRequest, responseStatus)
-import Network.HTTP.Simple (httpSink)
-import Network.HTTP.Types (statusCode)
+import Distribution.Package (PackageIdentifier(..))
+import GHC.Stack (HasCallStack)
 import System.FilePath (dropExtension)
 import Data.Text.IO (hPutStrLn)
 
 import Stackage.Package.Git
+import Stackage.Package.Hackage
 import Stackage.Package.IndexConduit
-import Stackage.Package.Locations
 
 
 -- | Compares hashes in 'package.json' to the ones in the repo. In case a new
@@ -39,15 +37,17 @@ import Stackage.Package.Locations
 -- Returned is a map with all packages and their valid versions.
 sinkPackageHashes
   :: MonadIO m
-  => GitRepository
-  -> Consumer IndexEntry m (Map PackageName (Set Version))
-sinkPackageHashes hashesRepo = CL.foldM updateHashes Map.empty
+  => Hackage
+  -> GitRepository
+  -> ConduitT IndexEntry Void m (Map PackageName (Set Version))
+sinkPackageHashes hackage hashesRepo = CL.foldM updateHashes Map.empty
   where
     updateHashes versionsMap (PackageEntry IndexFile { ifFile = HackagePackage {..}
                                                      , ..
                                                      }) = do
       validHashes <-
         createHashesIfMissing
+          hackage
           hashesRepo
           (hHashes hackageHashes)
           ifPackageName
@@ -96,13 +96,14 @@ validateHackageHashes packageName hackageHashesMap packageHashesMap =
 -- | If json file with package hashes is missing or corrupt (not parsable) it
 -- downloads the taralls with source code and saves their the hashes.
 createHashesIfMissing
-  :: MonadIO m
-  => GitRepository
+  :: (HasCallStack, MonadIO m)
+  => Hackage
+  -> GitRepository
   -> Map Text Text -- ^ Map with hashes from Hackage
   -> PackageName
   -> Version
   -> m Bool
-createHashesIfMissing hashesRepo hackageHashMap pkgName pkgVersion =
+createHashesIfMissing hackage hashesRepo hackageHashMap pkgName pkgVersion =
   liftIO $ do
     let jsonfp = dropExtension (getCabalFilePath pkgName pkgVersion) <.> "json"
     meres <- fmap eitherDecode' <$> repoReadFile hashesRepo jsonfp
@@ -119,17 +120,14 @@ createHashesIfMissing hashesRepo hackageHashMap pkgName pkgVersion =
           hackageHashMap
           (packageHashes package)
       Nothing -> do
-        mpackageComputed <- computePackage pkgName pkgVersion
-        case mpackageComputed of
-          Nothing -> return False
-          Just package -> do
-            areAllValid <-
-              validateHackageHashes
-                (pack $ getPackageFullName pkgName pkgVersion)
-                hackageHashMap
-                (packageHashes package)
-            when areAllValid $ repoWriteFile hashesRepo jsonfp (encode package)
-            return areAllValid
+        package <- computePackage hackage pkgName pkgVersion
+        areAllValid <-
+          validateHackageHashes
+            (pack $ getPackageFullName pkgName pkgVersion)
+            hackageHashMap
+            (packageHashes package)
+        when areAllValid $ repoWriteFile hashesRepo jsonfp (encode package)
+        return areAllValid
 
 -- | Kinda like sequence, except not.
 flatten :: Package Maybe -> Maybe (Package Identity)
@@ -153,57 +151,29 @@ instance FromJSON (Package Maybe) where
        Package <$> o .: "package-hashes" <*> o .: "package-locations" <*>
        o .:? "package-size"
 
+-- | Fetch a source tarball and derive its hashes and size.
 computePackage
   :: MonadIO m
-  => PackageName -- ^ Package name
+  => Hackage
+  -> PackageName -- ^ Package name
   -> Version -- ^ Package version
-  -> m (Maybe (Package Identity))
-computePackage pkgName pkgVersion = liftIO $ do
+  -> m (Package Identity)
+computePackage hackage pkgName pkgVersion = liftIO $ do
   putStrLn $ "Computing package information for: " ++ pack pkgFullName
-  s3req <- parseRequest s3url
-  hackagereq <- parseRequest hackageurl
-  mHashes <-
-    httpSink
-      s3req
-      (\resS3 ->
-         case statusCode $ responseStatus resS3 of
-           200 -> Just <$> pairSink
-           403 -> return Nothing
-           _ ->
-             throwIO $ HttpExceptionRequest s3req $
-             StatusCodeException resS3 mempty)
-  hashesHackage <- httpSink hackagereq (const pairSink)
-  mValidHashes <-
-    case mHashes of
-      Just hashes -> do
-        if (hashes /= hashesHackage)
-          then do
-            liftIO $ hPutStrLn stderr $
-              "Mismatched hashes between S3 and Hackage: " ++
-              tshow (pkgFullName, hashes, hashesHackage)
-            return Nothing
-          else return $ Just hashes
-      Nothing -> do
-        putStrLn $ "Skipping file not yet on S3: " ++ pack pkgFullName
-        return Nothing
-  return $
-    case mValidHashes of
-      Nothing -> Nothing
-      Just (hashes, size) ->
-        Just
-          Package
-          { packageHashes = hashes
-          , packageLocations = locations
-          , packageSize = Identity size
-          }
+  (hashes, size) <-
+    withSdist hackage pkgId $ \path -> do
+      lbs <- L.readFile path
+      runConduit $ CL.sourceList (L.toChunks lbs) .| getZipSink pairSink
+  return
+    Package
+    { packageHashes = hashes
+    , packageLocations = map pack (sdistLocations pkgId)
+    , packageSize = Identity size
+    }
   where
-    locations = [pack hackageurl, pack s3url]
+    pkgId = PackageIdentifier pkgName pkgVersion
     pkgFullName = getPackageFullName pkgName pkgVersion
-    hackageurl =
-      concat
-        [hackageBaseUrl, "/package/", pkgFullName, "/", pkgFullName, ".tar.gz"]
-    s3url = concat [mirrorFPComplete, "/package/", pkgFullName, ".tar.gz"]
-    pairSink = getZipSink $ (,) <$> hashesSink <*> ZipSink lengthCE
+    pairSink = (,) <$> hashesSink <*> ZipSink lengthCE
     hashesSink =
       fmap unions $
       sequenceA

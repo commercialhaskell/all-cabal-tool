@@ -23,6 +23,7 @@ import Data.Git.Storage
 import Data.Git.Storage.Object
 import Data.Git.Ref
 import Data.Git.Storage.Loose
+import GHC.Stack (HasCallStack)
 import System.Directory
 import System.FilePath
 
@@ -40,17 +41,17 @@ data GitObject
 -- | Marshalls a bytestring into a git blob object, computes its SHA1,
 -- compresses it and returns a `GitFile` that is of type `NonExecFile`.
 makeGitFile
-  :: (MonadThrow m, PrimMonad m)
+  :: (HasCallStack, MonadThrow m, PrimMonad m)
   => LByteString -- ^ Content of the blob.
   -> Word64 -- ^ Size of the content.
   -> m GitFile
 makeGitFile lbs sz = do
   (sha1, zipped) <-
     runConduit $
-    srcWithHeader "blob" lbs sz =$=
+    srcWithHeader "blob" lbs sz .|
     getZipSink ((,) <$> ZipSink sha1Sink <*> ZipSink compressSink)
   unless (sz == fromIntegral (L.length lbs)) $
-    error "Stackage.Package.Git.makeGitFile: Size mismatch."
+    error "Size mismatch."
   return $
     GitFile
     { gitFileRef = unDigestRef sha1
@@ -122,11 +123,11 @@ srcWithHeader oType oContent oSize = do
 
 compressSink
   :: (PrimMonad m, MonadThrow m)
-  => Consumer ByteString m ByteString
-compressSink = compress 1 defaultWindowBits =$= foldC
+  => ConduitT ByteString Void m ByteString
+compressSink = compress 1 defaultWindowBits .| foldC
 
 
-sha1Sink :: (Monad m) => Consumer ByteString m (Digest SHA1)
+sha1Sink :: (Monad m) => ConduitT ByteString Void m (Digest SHA1)
 sha1Sink = sinkHash
 
 

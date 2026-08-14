@@ -10,7 +10,7 @@ module Stackage.Package.IndexConduit
   , getPackageFullName
   , indexFileEntryConduit
   , sourceEntries
-  , httpTarballSink
+  , localTarballSink
   , IndexFile(..)
   , Cabal(..)
   , Versions(..)
@@ -26,52 +26,36 @@ import Data.Aeson as A
 import Data.Aeson.Types as A hiding (parse)
 import qualified Data.ByteString.Lazy as L
 import qualified Data.ByteString.Lazy.Char8 as L8
+import qualified Codec.Compression.GZip as GZip
 import qualified Data.Conduit.List as CL
-import Data.Conduit.Lazy (lazyConsume)
-import Data.Conduit.Zlib
 import Data.Foldable (msum)
+import GHC.Stack (HasCallStack)
 import Distribution.Version (Version)
 import Distribution.Package (PackageName)
 import Distribution.Version (VersionRange, anyVersion)
-import qualified Distribution.Text
-import Network.HTTP.Client.Conduit
-import Text.PrettyPrint (render)
-import qualified Network.HTTP.Client as H
-import qualified Network.HTTP.Client.TLS as H
 import Stackage.Package.Git
 import qualified Distribution.Pretty
 import qualified Distribution.Parsec as Parsec
 
--- | Download a tarball from a webserver, decompress, parse it and handle it
--- using a provided `Sink`. Using a conditional function it is possible to
--- prevent a tarball from being downloaded, for instance in such a case when an
--- unexpected response status was received, in which case `Nothing` will be
--- returned. That function also allows to return any value that depends on a
--- `Response`.
-httpTarballSink
+-- | Parse a tarball on disk and feed its entries to a `Sink`.
+localTarballSink
   :: MonadUnliftIO m
-  => Request -- ^ Request to the tarball file.
+  => FilePath -- ^ Path to the tarball.
   -> Bool -- ^ Is the tarball gzipped?
-  -> (Response () -> Sink Tar.Entry m a) -- ^ The sink of how entries in the tar file should be
-     -- processed.
+  -> ConduitT Tar.Entry Void m a -- ^ How entries in the tar file should be processed.
   -> m a
-httpTarballSink req isCompressed tarSink = do
-  man <- liftIO H.getGlobalManager
-  bracket (liftIO $ H.responseOpen req man) (liftIO . H.responseClose) $
-    \res -> do
-      let src' = bodyReaderSource $ H.responseBody res
-          src =
-            if isCompressed
-              then src' =$= ungzip
-              else src'
-          res_ = const () <$> res
-      tarChunks <- liftIO $ lazyConsume src
-      (sourceEntries $ Tar.read $ L.fromChunks tarChunks) $$ tarSink res_
+localTarballSink path isCompressed tarSink = do
+  lbs <- liftIO $ L.readFile path
+  runConduit $ (sourceEntries $ Tar.read $ decompress lbs) .| tarSink
+  where
+    decompress
+      | isCompressed = GZip.decompress
+      | otherwise = id
 
 
 sourceEntries
   :: (MonadIO m, Exception e)
-  => Tar.Entries e -> Producer m Tar.Entry
+  => Tar.Entries e -> ConduitT () Tar.Entry m ()
 sourceEntries Tar.Done = return ()
 sourceEntries (Tar.Next e rest) = yield e >> sourceEntries rest
 sourceEntries (Tar.Fail e) = throwIO e
@@ -144,8 +128,8 @@ getCabalFilePath (renderDistText -> pkgName) (renderDistText -> pkgVersion) =
 
 -- | A conduit that converts every tar entry of interest into `IndexEntry`.
 indexFileEntryConduit
-  :: MonadIO m
-  => Conduit Tar.Entry m IndexEntry
+  :: (HasCallStack, MonadIO m)
+  => ConduitT Tar.Entry IndexEntry m ()
 indexFileEntryConduit = CL.mapMaybeM getIndexFileEntry
   where
     getIndexFileEntry e@(Tar.entryContent -> Tar.NormalFile lbs sz) = liftIO $ do
@@ -194,7 +178,7 @@ indexFileEntryConduit = CL.mapMaybeM getIndexFileEntry
                   case decodeHackageHashes pkgName pkgVersion lbs of
                     Left err ->
                       error $
-                      "Stackage.Hackage.Hashes.entryUpdateHashes: There was an issue parsing: " ++
+                      "There was an issue parsing: " ++
                       Tar.entryPath e ++ ". Parsing error: " ++ err
                     Right parsedHashes -> parsedHashes
         Just (pkgName, Just pkgVersion, _)

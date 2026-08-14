@@ -30,7 +30,7 @@ import qualified Filesystem.Path.CurrentOS as P
 import Data.Conduit.Process
        (withCheckedProcessCleanup, sourceProcessWithStreams,
         Inherited(Inherited))
-import ClassyPrelude.Conduit (sourceLazy, sinkLazyBuilder)
+import GHC.Stack (HasCallStack)
 import System.Directory
 import System.Exit
 import System.Process (proc, cwd, showCommandForUser)
@@ -44,7 +44,8 @@ import Stackage.Package.Git.WorkTree
 -- some files from the git store and does appropriate cleanup when supplied action
 -- has terminated.
 withRepository
-  :: GitInfo -- ^ All information required for initializing the
+  :: HasCallStack
+  => GitInfo -- ^ All information required for initializing the
      -- repository. Use `ensureRepository` to create it.
   -> (GitRepository -> IO a) -- ^ Action to be performed on the
      -- repository.
@@ -123,7 +124,7 @@ repoReadFile GitRepository {repoInstance = GitInstance {..}} fp = do
 
 
 -- | Same as `readRepoFile`, but will throw an error if the file cannot be found.
-repoReadFile' :: GitRepository -> FilePath -> IO LByteString
+repoReadFile' :: HasCallStack => GitRepository -> FilePath -> IO LByteString
 repoReadFile' repo@GitRepository {repoInfo = GitInfo {..}} fp = do
   mfile <- repoReadFile repo fp
   case mfile of
@@ -261,7 +262,7 @@ ensureRepository repoHost repoAccount gitUser repoName repoBranchName repoBasePa
 
 
 -- | Signs a commit.
-signCommit :: Git -> String -> G.Commit -> IO G.Commit
+signCommit :: HasCallStack => Git -> String -> G.Commit -> IO G.Commit
 signCommit gitRepo key commit = do
   signature <- signObject gitRepo key (G.ObjCommit commit)
   -- Workaround for: https://github.com/vincenthz/hit/issues/35
@@ -271,8 +272,7 @@ signCommit gitRepo key commit = do
   let (sigBegin, sigRest) = L8.break (== '\n') signature
   when (sigBegin /= "-----BEGIN PGP SIGNATURE-----" || L.null sigRest) $
     error $
-    "Stackage.Package.Git.Repository.signCommit: Malformed signature: \n" ++
-    L8.unpack signature
+    "Malformed signature: \n" ++ L8.unpack signature
   let signatureKey = L.toStrict $ L.append "gpgsig " sigBegin
       signature' = L.toStrict $ L.drop 1 sigRest
   return
@@ -293,7 +293,7 @@ signTag gitRepo key tag = do
 
 -- | Signs an object (really useful only for either a commit or a tag) using a
 -- program specified in git configuration under 'gpg.program'.
-signObject :: Git -> String -> G.Object -> IO L.ByteString
+signObject :: HasCallStack => Git -> String -> G.Object -> IO L.ByteString
 signObject gitRepo key obj = do
   gpgProgram <- maybe "gpg" id <$> configGet gitRepo "gpg" "program"
   let args = ["-bsau", key]
@@ -303,8 +303,7 @@ signObject gitRepo key obj = do
     (L8.pack (objType ++ " " ++ show (L.length payload0 - 1)) /= header ||
      L.null payload0) $
     error $
-    "Stackage.Package.Git.Repository.signObject: Marshalled object " ++
-    objType ++ " is malformed."
+    "Marshalled object " ++ objType ++ " is malformed."
   (signature, err) <- runPipe "." gpgProgram args $ L.drop 1 payload0
   unless (L.null err) $ putStrLn $ "Warning: " ++ pack (L8.unpack err)
   return signature
@@ -346,12 +345,13 @@ runPipe dir cmd args input =
 -- | Run an external process, pipe @stdin@ to it and sink @stdout@ and
 -- @stderr@. Throws an error if process exited abnormally.
 runPipeWithConduit
-  :: FilePath -- ^ Filepath where process will run.
+  :: HasCallStack
+  => FilePath -- ^ Filepath where process will run.
   -> FilePath -- ^ Path to executable
   -> [String] -- ^ Arguments
-  -> Producer IO ByteString -- ^ @stdin@ producer
-  -> Consumer ByteString IO a -- ^ @stdout@ consumer
-  -> Consumer ByteString IO b -- ^ @stderr@ consumer
+  -> ConduitT () ByteString IO () -- ^ @stdin@ producer
+  -> ConduitT ByteString Void IO a -- ^ @stdout@ consumer
+  -> ConduitT ByteString Void IO b -- ^ @stderr@ consumer
   -> IO (a, b)
 runPipeWithConduit dir cmd args inputSrc stdoutSink stderrSink = do
   putStrLn $
@@ -368,5 +368,4 @@ runPipeWithConduit dir cmd args inputSrc stdoutSink stderrSink = do
     ExitSuccess -> return (out, err)
     code ->
       error $
-      "Stackage.Package.Location.runPipeWithConduit: " ++
       showCommandForUser cmd args ++ " produced an error: " ++ show code

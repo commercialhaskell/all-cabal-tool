@@ -16,6 +16,7 @@ import Data.Git.Ref
 import Data.Hourglass (timeFromElapsed)
 import qualified Data.Map as Map
 import Foreign.Storable (peekByteOff)
+import GHC.Stack (HasCallStack)
 import Time.System (timeCurrent)
 
 import qualified Data.Git as G
@@ -109,9 +110,12 @@ instance Show FileName where
 
 type TreePath = [FileName]
 
+-- | Do two TreePaths overlap with each other?
+overlaps :: TreePath -> TreePath -> Bool
+path1 `overlaps` path2 = and (zipWith (==) path1 path2)
 
 -- | Convert file path to a tree path.
-toTreePath :: FilePath -> TreePath
+toTreePath :: HasCallStack => FilePath -> TreePath
 toTreePath path = foldr toFileName [] splitPath'
   where
     splitPath' = S8.split '/' $ S8.pack path
@@ -153,9 +157,9 @@ data ShortRef =
 
 -- | Reduce memory usage by squeezing `Ref` into a much more memory efficient
 -- representation `ShortRef`.
-toShortRef :: MonadIO m => Ref -> m ShortRef
+toShortRef :: (HasCallStack, MonadIO m) => Ref -> m ShortRef
 toShortRef !(toBinary -> bs)
-    | length bs /= 20 = error "Stackage.Package.Git.Types.toShortRef: length is not 20"
+    | length bs /= 20 = error "length is not 20"
     | otherwise = liftIO $ BU.unsafeUseAsCString bs $ \ptr -> ShortRef
         <$> peekByteOff ptr 0
         <*> peekByteOff ptr 8

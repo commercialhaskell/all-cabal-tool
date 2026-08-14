@@ -12,6 +12,11 @@ build-type:          Simple
 extra-source-files:  README.md ChangeLog.md
 cabal-version:       >=1.10
 
+flag integration
+  description:       Build the test suite that talks to the live Hackage repository.
+  default:           False
+  manual:            True
+
 library
   hs-source-dirs:      src
   exposed-modules:     Stackage.Package.Hashes
@@ -22,6 +27,8 @@ library
                      , Stackage.Package.Git.Repository
                      , Stackage.Package.Git.Types
                      , Stackage.Package.Git.WorkTree
+                     , Stackage.Package.Hackage
+                     , Stackage.Package.HttpLib
                      , Stackage.Package.Metadata
                      , Stackage.Package.Metadata.Types
                      , Stackage.Package.Update
@@ -39,6 +46,7 @@ library
                      , directory
                      , enclosed-exceptions
                      , filepath
+                     , hackage-security
                      , hit
                      , hourglass
                      , http-client
@@ -46,12 +54,14 @@ library
                      , http-conduit
                      , http-types
                      , memory
+                     , network-uri
                      , pretty
                      , process
                      , resourcet
                      , system-filepath
                      , tar
                      , text
+                     , time
                      , utf8-string
                      , yaml
                      , zlib
@@ -71,6 +81,7 @@ executable all-cabal-tool
                      , classy-prelude-conduit
                      , conduit-extra
                      , directory
+                     , hackage-security
                      , http-client
                      , http-conduit
                      , http-types
@@ -98,6 +109,21 @@ test-suite all-cabal-tool-test
                      , text
   default-language:    Haskell2010
   ghc-options:         -Wall
+
+test-suite all-cabal-tool-integration
+  type:                exitcode-stdio-1.0
+  hs-source-dirs:      test-integration
+  main-is:             Main.hs
+  build-depends:       base
+                     , Cabal
+                     , all-cabal-tool
+                     , directory
+                     , temporary
+                     , time
+  default-language:    Haskell2010
+  ghc-options:         -Wall
+  if !flag(integration)
+    buildable:         False
 
 source-repository head
   type:     git

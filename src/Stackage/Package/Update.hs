@@ -9,7 +9,6 @@ module Stackage.Package.Update where
 import ClassyPrelude.Conduit
 import qualified Codec.Archive.Tar as Tar
 import qualified Data.ByteString.Lazy as L
-import Control.Monad.IO.Class (MonadIO(liftIO))
 import Data.Aeson as A (encode)
 import Distribution.Package (PackageName)
 import Distribution.Version (Version)
@@ -18,6 +17,7 @@ import Data.Yaml as Y (encode)
 import Network.HTTP.Simple (parseRequest, httpJSONEither, getResponseBody)
 
 
+import Stackage.Package.Hackage
 import Stackage.Package.IndexConduit
 import Stackage.Package.Git
 import Stackage.Package.Locations
@@ -66,19 +66,22 @@ entryUpdateFile _ _ _ = return ()
 -- hashes repo.
 allHashesUpdate
   :: (MonadUnliftIO m, PrimMonad m)
-  => Repositories -> Sink Tar.Entry m (Map PackageName (Set Version))
-allHashesUpdate Repositories {..} = do
-  indexFileEntryConduit =$= sinkPackageHashes allCabalHashes
+  => Hackage
+  -> Repositories
+  -> ConduitT Tar.Entry Void m (Map PackageName (Set Version))
+allHashesUpdate hackage Repositories {..} = do
+  indexFileEntryConduit .| sinkPackageHashes hackage allCabalHashes
 
 
 -- | Main `Sink` that uses entries from the 01-index.tar.gz file to update all
 -- relevant files in all three repos.
 allCabalUpdate
   :: (MonadUnliftIO m, PrimMonad m)
-  => Repositories
+  => Hackage
+  -> Repositories
   -> Map PackageName (Set Version)
-  -> Sink Tar.Entry m ()
-allCabalUpdate repos@Repositories {..} versionsMap = do
+  -> ConduitT Tar.Entry Void m ()
+allCabalUpdate hackage repos@Repositories {..} versionsMap = do
   liftIO $
     saveDeprecated
       [ (allCabalHashes, "deprecated.json")
@@ -87,9 +90,9 @@ allCabalUpdate repos@Repositories {..} versionsMap = do
   -- generate and validate all hashes, while keeping only relevant files
   let hasHashes = containsHashesFor versionsMap
   packageVersions <-
-    indexFileEntryConduit =$=
+    indexFileEntryConduit .|
     (getZipSink
        (ZipSink (CL.mapM_ (entryUpdateFile hasHashes allCabalFiles)) *>
         ZipSink (CL.mapM_ (entryUpdateFile hasHashes allCabalHashes)) *>
         ZipSink sinkPackageVersions))
-  updateMetadata repos versionsMap packageVersions
+  updateMetadata hackage repos versionsMap packageVersions

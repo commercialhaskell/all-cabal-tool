@@ -1,4 +1,5 @@
 {-# LANGUAGE OverloadedStrings #-}
+{-# OPTIONS_GHC -Wno-orphans #-}
 module Main where
 
 import qualified Data.ByteString as B
@@ -16,7 +17,7 @@ import Test.Tasty.QuickCheck
 import Data.Git.Ref (Ref, fromBinary, toBinary)
 
 import Stackage.Package.Git.Object (makeGitFile)
-import Stackage.Package.Git.Types (FileName(..), GitFile(..), TreePath, toShortRef, fromShortRef)
+import Stackage.Package.Git.Types (FileName(..), GitFile(..), TreePath, toShortRef, fromShortRef, overlaps)
 import Stackage.Package.Git.WorkTree (emptyWorkTree, insertGitFile, lookupFile, removeGitFile)
 import Stackage.Package.Metadata.Types (Deprecation(..))
 
@@ -201,7 +202,7 @@ prop_insert_shadow (TestTreePath path) (TestContent content1) (TestContent conte
 -- | Insert commutativity: inserting at disjoint paths in either order gives same result
 prop_insert_commute :: TestTreePath -> TestTreePath -> TestContent -> TestContent -> Property
 prop_insert_commute (TestTreePath path1) (TestTreePath path2) (TestContent content1) (TestContent content2) =
-  path1 /= path2 ==> monadicIO $ do
+  not (path1 `overlaps` path2) ==> monadicIO $ do
     gitFile1 <- run $ mkTestGitFile content1
     gitFile2 <- run $ mkTestGitFile content2
     let tree1 = insertGitFile (insertGitFile emptyWorkTree path1 gitFile1) path2 gitFile2
@@ -293,14 +294,6 @@ prop_deprecation_json_roundtrip dep =
   case fromJSON (toJSON dep) of
     Aeson.Success dep' -> dep' == dep
     Aeson.Error _      -> False
-
--- Need Eq and Show instances for Deprecation
-instance Eq Deprecation where
-  d1 == d2 = depPackage d1 == depPackage d2 &&
-             depInFavourOf d1 == depInFavourOf d2
-
-instance Show Deprecation where
-  show d = "Deprecation " ++ show (depPackage d) ++ " " ++ show (depInFavourOf d)
 
 main :: IO ()
 main = defaultMain tests

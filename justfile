@@ -16,6 +16,10 @@ push-cachix:
     nix develop --profile .dev-profile -c true
     cachix push stackage-infrastructure .dev-profile
 
+# Run the test suite that talks to the live Hackage repository
+test-integration:
+    nix develop --command cabal test all-cabal-tool-integration --flags=integration
+
 # Build with stack
 build-stack:
     stack build

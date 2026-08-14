@@ -13,12 +13,9 @@ import ClassyPrelude.Conduit hiding (pi)
 import Crypto.Hash (hashlazy, SHA256(..))
 import Data.Aeson
        (FromJSON(..), ToJSON(..), object, withObject, (.:), (.=))
-import Data.Map (Map)
 import qualified Data.Map as Map
 import Data.List.NonEmpty (NonEmpty)
-import Data.Set (Set)
 import qualified Data.Set as Set
-import Data.Text (Text)
 import Distribution.Compiler (CompilerFlavor(GHC))
 import Distribution.Package
        (Dependency(..), PackageIdentifier(..), PackageName)
@@ -31,7 +28,7 @@ import Distribution.PackageDescription
 import Distribution.Parsec.Error (PError)
 import Distribution.Pretty (prettyShow)
 import Distribution.System (Arch(X86_64), OS(Linux))
-import Distribution.Utils.ShortText (fromShortText)
+import Distribution.Utils.ShortText (ShortText, fromShortText)
 import Distribution.Version
        (VersionRange, intersectVersionRanges, simplifyVersionRange,
         withinRange, Version, mkVersion)
@@ -109,7 +106,7 @@ instance FromJSON PackageInfo where
 data Deprecation = Deprecation
   { depPackage :: !Text
   , depInFavourOf :: !(Set Text)
-  }
+  } deriving (Eq, Show)
 
 instance ToJSON Deprecation where
   toJSON d =
@@ -137,10 +134,11 @@ data CabalFile = CabalFile
   }
 
 
+shortTextKey :: ShortText -> Text
 shortTextKey = fromString . fromShortText
 
-parseCabalFile :: FilePath -> LByteString -> Either (Maybe Version, NonEmpty PError) CabalFile
-parseCabalFile fp lbs = do
+parseCabalFile :: LByteString -> Either (Maybe Version, NonEmpty PError) CabalFile
+parseCabalFile lbs = do
   gpd <- egpd
   let
     getDeps' = getDeps (getCheckCond gpd)
