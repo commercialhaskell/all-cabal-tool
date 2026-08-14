@@ -27,12 +27,12 @@ main = do
   withSystemTempDirectory "all-cabal-tool-integration" $ \cacheDir ->
     withHackage cacheDir $ \hackage -> do
       now <- getCurrentTime
-      hasUpdates <- checkIndexUpdates hackage now
+      (hasUpdates, indexPath) <- refreshIndex hackage now
       check "a fresh cache reports updates" $
         case hasUpdates of
           HasUpdates -> True
           NoUpdates -> False
-      indexSize <- getFileSize =<< indexTarPath hackage
+      indexSize <- getFileSize indexPath
       check "the index was cached" (indexSize > 0)
       let (pkgId, expectedSize) = sampleSdist
       sdistSize <- withSdist hackage pkgId getFileSize

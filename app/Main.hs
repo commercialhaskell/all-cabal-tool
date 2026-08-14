@@ -117,12 +117,11 @@ processIndexUpdate
   -> Bool -- ^ Regenerate even when the index is unchanged.
   -> m Bool
 processIndexUpdate hackage repos now forceUpdate = liftIO $ do
-  hasUpdates <- checkIndexUpdates hackage now
+  (hasUpdates, indexPath) <- refreshIndex hackage now
   case hasUpdates of
     NoUpdates
       | not forceUpdate -> return False
     _ -> do
-      indexPath <- indexTarPath hackage
       validVersions <-
         localTarballSink indexPath False (allHashesUpdate hackage repos)
       localTarballSink indexPath False (allCabalUpdate hackage repos validVersions)

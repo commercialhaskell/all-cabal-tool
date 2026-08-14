@@ -7,8 +7,7 @@ module Stackage.Package.Hackage
   ( Hackage
   , HasUpdates(..)
   , withHackage
-  , checkIndexUpdates
-  , indexTarPath
+  , refreshIndex
   , withSdist
   , sdistLocations
   ) where
@@ -98,22 +97,20 @@ withHackage cacheDir callback =
              bootstrap rep hackageRootKeyIds hackageRootKeyThreshold
          callback Hackage {hackageRepository = rep, hackageCache = cache})
 
--- | Refresh the cached index, reporting whether anything actually changed.
-checkIndexUpdates
-  :: Hackage
+-- | Refresh the cached index, reporting whether it moved and where the
+-- uncompressed @01-index.tar@ now sits.
+refreshIndex
+  :: HasCallStack
+  => Hackage
   -> UTCTime -- ^ Time to judge metadata expiry against
-  -> IO HasUpdates
-checkIndexUpdates hackage now =
-  uncheckClientErrors $
-    checkForUpdates (hackageRepository hackage) (Just now)
-
--- | Location of the uncompressed @01-index.tar@ left behind by
--- 'checkIndexUpdates'.
-indexTarPath :: HasCallStack => Hackage -> IO FilePath
-indexTarPath hackage = do
+  -> IO (HasUpdates, FilePath)
+refreshIndex hackage now = do
+  hasUpdates <-
+    uncheckClientErrors $
+      checkForUpdates (hackageRepository hackage) (Just now)
   mpath <- getCachedIndex (hackageCache hackage) FUn
   case mpath of
-    Just path -> return (toFilePath path)
+    Just path -> return (hasUpdates, toFilePath path)
     Nothing -> error "no index in the cache"
 
 -- | Fetch a source tarball, verifying it against the index metadata, and hand
