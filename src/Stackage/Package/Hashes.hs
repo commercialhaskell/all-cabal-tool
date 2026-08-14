@@ -120,14 +120,17 @@ createHashesIfMissing hackage hashesRepo hackageHashMap pkgName pkgVersion =
           hackageHashMap
           (packageHashes package)
       Nothing -> do
-        package <- computePackage hackage pkgName pkgVersion
-        areAllValid <-
-          validateHackageHashes
-            (pack $ getPackageFullName pkgName pkgVersion)
-            hackageHashMap
-            (packageHashes package)
-        when areAllValid $ repoWriteFile hashesRepo jsonfp (encode package)
-        return areAllValid
+        mpackage <- computePackage hackage pkgName pkgVersion
+        case mpackage of
+          Nothing -> return False
+          Just package -> do
+            areAllValid <-
+              validateHackageHashes
+                (pack $ getPackageFullName pkgName pkgVersion)
+                hackageHashMap
+                (packageHashes package)
+            when areAllValid $ repoWriteFile hashesRepo jsonfp (encode package)
+            return areAllValid
 
 -- | Kinda like sequence, except not.
 flatten :: Package Maybe -> Maybe (Package Identity)
@@ -151,25 +154,31 @@ instance FromJSON (Package Maybe) where
        Package <$> o .: "package-hashes" <*> o .: "package-locations" <*>
        o .:? "package-size"
 
--- | Fetch a source tarball and derive its hashes and size.
+-- | Fetch a source tarball and derive its hashes and size, or nothing at all if
+-- the tarball is no longer served.
 computePackage
   :: MonadIO m
   => Hackage
   -> PackageName -- ^ Package name
   -> Version -- ^ Package version
-  -> m (Package Identity)
+  -> m (Maybe (Package Identity))
 computePackage hackage pkgName pkgVersion = liftIO $ do
   putStrLn $ "Computing package information for: " ++ pack pkgFullName
-  (hashes, size) <-
+  fetched <-
     withSdist hackage pkgId $ \path -> do
       lbs <- L.readFile path
       runConduit $ CL.sourceList (L.toChunks lbs) .| getZipSink pairSink
-  return
-    Package
-    { packageHashes = hashes
-    , packageLocations = map pack (sdistLocations pkgId)
-    , packageSize = Identity size
-    }
+  case fetched of
+    Left unavailable -> do
+      hPutStrLn stderr $ pack $ displayException unavailable
+      return Nothing
+    Right (hashes, size) ->
+      return $ Just
+        Package
+        { packageHashes = hashes
+        , packageLocations = map pack (sdistLocations pkgId)
+        , packageSize = Identity size
+        }
   where
     pkgId = PackageIdentifier pkgName pkgVersion
     pkgFullName = getPackageFullName pkgName pkgVersion

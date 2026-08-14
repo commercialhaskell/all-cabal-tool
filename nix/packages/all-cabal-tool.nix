@@ -29,8 +29,8 @@ mkDerivation {
     temporary zlib
   ];
   testHaskellDepends = [
-    aeson base bytestring containers hit QuickCheck tasty
-    tasty-quickcheck text
+    aeson base bytestring containers hackage-security hit http-client
+    network-uri QuickCheck tasty tasty-quickcheck text
   ];
   homepage = "https://github.com/commercialhaskell/all-cabal-tool#readme";
   description = "Update the various all-cabal-* repos";

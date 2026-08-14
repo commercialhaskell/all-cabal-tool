@@ -15,11 +15,13 @@
 module Stackage.Package.HttpLib
   ( withHttpLib
   , UnexpectedResponse(..)
+  , unexpectedResponseStatus
   ) where
 
 import Control.Exception (Exception(..), IOException)
 import qualified Data.ByteString.Char8 as S8
 import Data.List (intercalate)
+import Data.Typeable (cast)
 import Network.HTTP.Client
        (Manager, Request(..), Response(..), requestFromURI)
 import qualified Network.HTTP.Client as HTTP
@@ -118,9 +120,11 @@ wrapCustomEx act =
   where
     go ex = throwChecked (SomeRemoteError ex)
 
-data UnexpectedResponse =
-  UnexpectedResponse URI
-                     Int
+-- | A mirror answered with something other than the file that was asked for.
+data UnexpectedResponse = UnexpectedResponse
+  { unexpectedUri :: URI
+  , unexpectedStatus :: Int
+  }
 
 instance Pretty UnexpectedResponse where
   pretty (UnexpectedResponse uri code) =
@@ -130,3 +134,8 @@ deriving instance Show UnexpectedResponse
 
 instance Exception UnexpectedResponse where
   displayException = pretty
+
+-- | The status a mirror answered with, for failures that came from the
+-- response rather than from the transport underneath it.
+unexpectedResponseStatus :: SomeRemoteError -> Maybe Int
+unexpectedResponseStatus (SomeRemoteError inner) = unexpectedStatus <$> cast inner

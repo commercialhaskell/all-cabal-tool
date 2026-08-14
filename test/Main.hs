@@ -9,16 +9,20 @@ import qualified Data.Text as T
 import Data.Aeson (fromJSON, toJSON)
 import qualified Data.Aeson as Aeson
 import Data.Word (Word8)
+import Network.HTTP.Client (HttpException(InvalidUrlException))
+import Network.URI (nullURI)
 import Test.QuickCheck
 import Test.QuickCheck.Monadic (monadicIO, run)
 import Test.Tasty
 import Test.Tasty.QuickCheck
 
 import Data.Git.Ref (Ref, fromBinary, toBinary)
+import Hackage.Security.Client (SomeRemoteError(..))
 
 import Stackage.Package.Git.Object (makeGitFile)
 import Stackage.Package.Git.Types (FileName(..), GitFile(..), TreePath, toShortRef, fromShortRef, overlaps)
 import Stackage.Package.Git.WorkTree (emptyWorkTree, insertGitFile, lookupFile, removeGitFile)
+import Stackage.Package.HttpLib (UnexpectedResponse(..), unexpectedResponseStatus)
 import Stackage.Package.Metadata.Types (Deprecation(..))
 
 -- | Arbitrary instance for FileName.
@@ -295,6 +299,21 @@ prop_deprecation_json_roundtrip dep =
     Aeson.Success dep' -> dep' == dep
     Aeson.Error _      -> False
 
+-- UnexpectedResponse properties
+
+-- | A mirror that answered with a status is reported as that status.
+prop_unexpected_response_status :: Int -> Bool
+prop_unexpected_response_status code =
+  unexpectedResponseStatus (SomeRemoteError (UnexpectedResponse nullURI code)) ==
+  Just code
+
+-- | A failure to reach a mirror at all is not a status.
+prop_transport_failure_has_no_status :: Property
+prop_transport_failure_has_no_status =
+  once $
+  unexpectedResponseStatus (SomeRemoteError (InvalidUrlException "" "")) ==
+  Nothing
+
 main :: IO ()
 main = defaultMain tests
 
@@ -321,5 +340,9 @@ tests = testGroup "all-cabal-tool"
     ]
   , testGroup "Deprecation"
     [ testProperty "JSON roundtrip" prop_deprecation_json_roundtrip
+    ]
+  , testGroup "UnexpectedResponse"
+    [ testProperty "a response carries its status" prop_unexpected_response_status
+    , testProperty "a transport failure has no status" prop_transport_failure_has_no_status
     ]
   ]

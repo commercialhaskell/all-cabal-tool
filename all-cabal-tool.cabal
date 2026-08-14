@@ -102,7 +102,10 @@ test-suite all-cabal-tool-test
                      , all-cabal-tool
                      , bytestring
                      , containers
+                     , hackage-security
                      , hit
+                     , http-client
+                     , network-uri
                      , QuickCheck
                      , tasty
                      , tasty-quickcheck

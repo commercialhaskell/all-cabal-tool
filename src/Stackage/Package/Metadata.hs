@@ -8,6 +8,7 @@ module Stackage.Package.Metadata
   ) where
 
 import qualified Codec.Archive.Tar as Tar
+import Control.Exception (displayException)
 import Control.Monad (when)
 import Control.Monad.IO.Class (MonadIO(liftIO))
 import qualified Data.ByteString.Lazy as L
@@ -156,17 +157,20 @@ updatePackageIfChanged hackage metadataRepo (cabalFile@CabalFile {..}, packageNa
     sink = CL.fold goEntry (cfDescription, "haddock", "", "")
     updatePackage = do
       checkCabalFile
-      (desc, desct, cl, clt) <-
+      fetched <-
         withSdist hackage (PackageIdentifier packageName pkgVersionMax) $
         \path -> localTarballSink path True sink
-      putStrLn $
-        "Updating Metadata for package: " ++
-        pkgNameStr ++ " to version: " ++ pkgVersionStr
-      repoWriteFile
-        metadataRepo
-        fp
-        (L.fromStrict . Y.encode $
-         makePackageInfo cabalFile versionSet desc desct cl clt)
+      case fetched of
+        Left unavailable -> hPutStrLn stderr $ displayException unavailable
+        Right (desc, desct, cl, clt) -> do
+          putStrLn $
+            "Updating Metadata for package: " ++
+            pkgNameStr ++ " to version: " ++ pkgVersionStr
+          repoWriteFile
+            metadataRepo
+            fp
+            (L.fromStrict . Y.encode $
+             makePackageInfo cabalFile versionSet desc desct cl clt)
     fp =
       "packages" </> (unpack $ toLower $ pack $ take 2 $ pkgNameStr ++ "XX") </>
       pkgNameStr <.>
