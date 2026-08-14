@@ -109,6 +109,9 @@ instance Show FileName where
 
 type TreePath = [FileName]
 
+-- | Do two TreePaths overlap with each other?
+overlaps :: TreePath -> TreePath -> Bool
+path1 `overlaps` path2 = and (zipWith (==) path1 path2)
 
 -- | Convert file path to a tree path.
 toTreePath :: FilePath -> TreePath
