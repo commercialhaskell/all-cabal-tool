@@ -6,7 +6,7 @@
 , hourglass, http-client, http-client-tls, http-conduit, http-types
 , lens, lib, memory, network-uri, optparse-applicative, pretty
 , process, QuickCheck, resourcet, system-filepath, tar, tasty
-, tasty-quickcheck, temporary, text, utf8-string, yaml, zlib
+, tasty-quickcheck, temporary, text, time, utf8-string, yaml, zlib
 }:
 mkDerivation {
   pname = "all-cabal-tool";
@@ -19,13 +19,14 @@ mkDerivation {
     conduit-extra containers cryptonite cryptonite-conduit directory
     enclosed-exceptions filepath hackage-security hit hourglass
     http-client http-client-tls http-conduit http-types memory
-    network-uri pretty process resourcet system-filepath tar text
+    network-uri pretty process resourcet system-filepath tar text time
     utf8-string yaml zlib
   ];
   executableHaskellDepends = [
     aeson amazonka amazonka-core amazonka-s3 base bytestring
-    classy-prelude-conduit conduit-extra directory http-client
-    http-conduit http-types lens optparse-applicative temporary zlib
+    classy-prelude-conduit conduit-extra directory hackage-security
+    http-client http-conduit http-types lens optparse-applicative
+    temporary zlib
   ];
   testHaskellDepends = [
     aeson base bytestring containers hit QuickCheck tasty
