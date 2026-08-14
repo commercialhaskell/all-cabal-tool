@@ -1,6 +1,6 @@
 -- | Exercises the @hackage-security@ client against the live Hackage
--- repository: bootstrapping trust, fetching the index, and fetching a
--- verified source tarball.
+-- repository: bootstrapping trust, fetching the index, and fetching both a
+-- verified source tarball and a withdrawn one.
 --
 -- Enable with @cabal test --flags=integration@.
 module Main where
@@ -21,6 +21,11 @@ sampleSdist :: (PackageIdentifier, Integer)
 sampleSdist =
   (PackageIdentifier (mkPackageName "text") (mkVersion [2, 1, 2]), 449871)
 
+-- | @hermes-1.3.4.3@ is still named by the index, but isn't available.
+withdrawnSdist :: PackageIdentifier
+withdrawnSdist =
+  PackageIdentifier (mkPackageName "hermes") (mkVersion [1, 3, 4, 3])
+
 main :: IO ()
 main = do
   hSetBuffering stdout LineBuffering
@@ -35,8 +40,16 @@ main = do
       indexSize <- getFileSize indexPath
       check "the index was cached" (indexSize > 0)
       let (pkgId, expectedSize) = sampleSdist
-      sdistSize <- withSdist hackage pkgId getFileSize
-      check "the source tarball has the published size" (sdistSize == expectedSize)
+      fetched <- withSdist hackage pkgId getFileSize
+      check "the source tarball has the published size" $
+        case fetched of
+          Right sdistSize -> sdistSize == expectedSize
+          Left _ -> False
+      withdrawn <- withSdist hackage withdrawnSdist getFileSize
+      check "a withdrawn source tarball is reported, not thrown" $
+        case withdrawn of
+          Left _ -> True
+          Right _ -> False
 
 check :: String -> Bool -> IO ()
 check what ok = do

@@ -6,13 +6,14 @@
 module Stackage.Package.Hackage
   ( Hackage
   , HasUpdates(..)
+  , SdistUnavailable(..)
   , withHackage
   , refreshIndex
   , withSdist
   , sdistLocations
   ) where
 
-import Control.Exception (bracket)
+import Control.Exception (Exception(..), bracket, throwIO)
 import Control.Monad (when)
 import GHC.Stack (HasCallStack)
 import Data.Time (UTCTime)
@@ -33,10 +34,11 @@ import Hackage.Security.Client.Formats (Format(..))
 import Hackage.Security.Client.Repository.Cache
        (Cache(..), getCachedIndex)
 import qualified Hackage.Security.Client.Repository.Remote as Remote
+import Hackage.Security.Util.Checked (tryChecked)
 import Hackage.Security.Util.Path (fromFilePath, makeAbsolute, toFilePath)
-import Hackage.Security.Util.Pretty (pretty)
+import Hackage.Security.Util.Pretty (Pretty(..))
 
-import Stackage.Package.HttpLib (withHttpLib)
+import Stackage.Package.HttpLib (unexpectedResponseStatus, withHttpLib)
 
 -- | A bootstrapped connection to Hackage together with the local cache backing
 -- it.
@@ -44,6 +46,22 @@ data Hackage = Hackage
   { hackageRepository :: Repository Remote.RemoteTemp
   , hackageCache :: Cache
   }
+
+-- | A package whose source tarball no mirror would serve.
+--
+-- This can happen for moderated packages. The index is append-only, so they're
+-- still there... just not downloadable.
+data SdistUnavailable = SdistUnavailable
+  { unavailablePackage :: PackageIdentifier
+  , unavailableStatus :: Int -- ^ What the last mirror tried answered with
+  } deriving (Show)
+
+instance Pretty SdistUnavailable where
+  pretty (SdistUnavailable pkgId code) =
+    "No mirror would serve " ++ display pkgId ++ ": status " ++ show code
+
+instance Exception SdistUnavailable where
+  displayException = pretty
 
 -- | Primary server first, then out-of-band mirrors.
 --
@@ -118,14 +136,25 @@ refreshIndex hackage now = do
 --
 -- The tarball lands under the cache root because @hackage-security@ moves it
 -- there from a temporary file of its own with a plain rename.
-withSdist :: Hackage -> PackageIdentifier -> (FilePath -> IO a) -> IO a
+withSdist
+  :: Hackage
+  -> PackageIdentifier
+  -> (FilePath -> IO a)
+  -> IO (Either SdistUnavailable a)
 withSdist hackage pkgId action = do
   let tmpDir = toFilePath (cacheRoot (hackageCache hackage)) </> "sdists"
   createDirectoryIfMissing True tmpDir
   bracket (newTempFile tmpDir) removeFile $ \dest -> do
-    uncheckClientErrors $
+    fetched <-
+      uncheckClientErrors $
+      tryChecked $
       downloadPackage' (hackageRepository hackage) pkgId dest
-    action dest
+    case fetched of
+      Right () -> Right <$> action dest
+      Left err ->
+        case unexpectedResponseStatus err of
+          Just code -> return (Left (SdistUnavailable pkgId code))
+          Nothing -> throwIO err
   where
     newTempFile dir = do
       (path, h) <- openBinaryTempFile dir (display pkgId ++ ".tar.gz")
