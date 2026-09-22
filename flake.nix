@@ -19,8 +19,20 @@
       let
         hsOverlay =  pkgs: hself: hsuper: {
           all-cabal-tool = hself.callPackage ./nix/packages/all-cabal-tool.nix {};
-          Cabal = hself.callPackage ./nix/packages/Cabal.nix {};
+          # Note [Relaxed bounds]
+          # ~~~~~~~~~~~~~~~~~~~~~
+          # Tracking the latest Cabal release means outrunning some version
+          # bounds; stack.yaml's allow-newer-deps mirrors this list.
+          #  - Cabal's process bounds only exclude macOS-segfaulting releases
+          #    (haskell/cabal#11465), so this Linux-only build can ignore them.
+          Cabal = pkgs.haskell.lib.doJailbreak (hself.callPackage ./nix/packages/Cabal.nix {});
           Cabal-syntax = hself.callPackage ./nix/packages/Cabal-syntax.nix {};
+          # Nixpkgs' hackage-security predates Cabal-syntax 3.18
+          hackage-security = hself.callPackage ./nix/packages/hackage-security.nix {};
+          # These custom Setup.hs's predate Cabal 3.18's Verbosity
+          # changes; compile them with GHC's bundled Cabal instead.
+          entropy = hsuper.entropy.override { Cabal = null; };
+          ghc-paths = hsuper.ghc-paths.override { Cabal = null; };
           # Tests require being run from within the git repo. Disable.
           hit = pkgs.haskell.lib.dontCheck (hself.callPackage ./nix/packages/hit.nix {});
           # GHC 9.10 support not yet released; using git main
