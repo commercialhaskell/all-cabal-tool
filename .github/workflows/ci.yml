@@ -39,6 +39,8 @@ jobs:
 
   stack-test:
     runs-on: ubuntu-latest
+    # Disabled while stack doesn't support Cabal-3.18.
+    if: false
     steps:
       - name: Checkout
         uses: actions/checkout@v4

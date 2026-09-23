@@ -23,19 +23,44 @@ packages:
   original:
     hackage: patience-0.3@sha256:491a8d0bfbffc06311c41dadf225eb96b52a0dd95c089778ac2ba0b13dd58d6e,1558
 - completed:
-    hackage: Cabal-3.14.2.0@sha256:5608a3091be7c029a3e8b2585ed51f41edd58effd1b51f3ad32504847e6f9753,14148
+    hackage: Cabal-3.18.1.0@sha256:489310326526f970b7b28f05f6dcbaeeb11d370c86fa501b242329ce875f2e51,13985
     pantry-tree:
-      sha256: 158fe3405f202371c27a20dab78c127bdea03c4e8788b1f6c1a0fb954f087842
-      size: 12219
+      sha256: 5041a1ba5237395c2a0d0ffc85c750fccb29534e9209c78db0f21d0cade2203d
+      size: 12010
   original:
-    hackage: Cabal-3.14.2.0
+    hackage: Cabal-3.18.1.0
 - completed:
-    hackage: Cabal-syntax-3.14.2.0@sha256:16766e2cd18f98bf259d2caf2b507764ebdfff0b16c2fb5b293fc57c1137af6f,7380
+    hackage: Cabal-syntax-3.18.1.0@sha256:789790cc1f3554a65cf94d6030a285fa1f4772e5106934e1b7cd34026acd0220,7529
     pantry-tree:
-      sha256: 737f9522e754f8c1610a115a01bb264924a7cde1c931e285f3758ba46f145443
-      size: 10977
+      sha256: bf6f5424d4aae86f5cd5a8368fd81f83632d7220ef495423159918fcc0f8cfc7
+      size: 11237
   original:
-    hackage: Cabal-syntax-3.14.2.0
+    hackage: Cabal-syntax-3.18.1.0
+- completed:
+    hackage: hackage-security-0.6.4.0@sha256:3e65c97a175b8bf004213d9c098039752c46cc616ed7ee49c987ad011ab01042,9498
+    pantry-tree:
+      sha256: 3eb10ac0faee3655b152db2527634af6aa5c7c30ab39eb43bab99f21146233ba
+      size: 3977
+  original:
+    hackage: hackage-security-0.6.4.0
+- completed:
+    hackage: cabal-doctest-1.0.13@sha256:2c0c3f2e72d741a56a0d6a66714c86c5b65777ef3aac5d95bb16a375944c5c49,2079
+    pantry-tree:
+      sha256: 0e382d5f2ba500bc1458984716b5aa073b121fb42be702f734411f6351c771f5
+      size: 335
+  original:
+    hackage: cabal-doctest-1.0.13
+- completed:
+    name: entropy
+    pantry-tree:
+      sha256: 58238584cd66602f87f7c4b21f8e398c5a1f9160246965b44bdbd5446def0ff2
+      size: 860
+    sha256: b2cb9077d68c83f74e2ea02b0f548bfa8aa1a7585ee2b974222f4f4d2f7de507
+    size: 11953
+    url: https://github.com/sternenseemann/entropy/archive/52b0c314d182de512c3293c6ac9b0186efbebc6f.tar.gz
+    version: 0.4.1.11
+  original:
+    url: https://github.com/sternenseemann/entropy/archive/52b0c314d182de512c3293c6ac9b0186efbebc6f.tar.gz
 - completed:
     hackage: microlens-0.5.0.0@sha256:af10ae1d922c543b2ec7cbad0f92ce74572621146404bb341fa0cc016ebb59dc,4762
     pantry-tree:
@@ -117,7 +142,7 @@ packages:
     url: https://github.com/brendanhay/amazonka/archive/a7d699be1076e2aad05a1930ca3937ffea954ad8.tar.gz
 snapshots:
 - completed:
-    sha256: b7dc388c75a62a8a2f1ac753f3bfc3f43a3a2cb58d8a920272cc9a049ff76c62
-    size: 726792
-    url: https://raw.githubusercontent.com/commercialhaskell/stackage-snapshots/master/lts/24/29.yaml
-  original: lts-24.29
+    sha256: abc790b571e0c70e929db74b329e3c18d7e76a6e173e8bdf94f1ba20770d4c24
+    size: 728990
+    url: https://raw.githubusercontent.com/commercialhaskell/stackage-snapshots/master/lts/24/38.yaml
+  original: lts-24.38

@@ -25,7 +25,7 @@ import Distribution.PackageDescription
         condBenchmarks, condExecutables, condLibrary, condTestSuites,
         description, genPackageFlags, homepage, license, maintainer,
         package, packageDescription, synopsis)
-import Distribution.Parsec.Error (PError)
+import Distribution.Parsec.Error (PError, perror)
 import Distribution.Pretty (prettyShow)
 import Distribution.System (Arch(X86_64), OS(Linux))
 import Distribution.Utils.ShortText (ShortText, fromShortText)
@@ -33,6 +33,8 @@ import Distribution.Version
        (VersionRange, intersectVersionRanges, simplifyVersionRange,
         withinRange, Version, mkVersion)
 import Distribution.Types.CondTree (CondBranch (..))
+import qualified Distribution.Compat.Lens as L
+import qualified Distribution.Types.BuildInfo.Lens as L
 import Distribution.PackageDescription.Parsec
        (parseGenericPackageDescription, runParseResult)
 import Stackage.Package.IndexConduit
@@ -141,6 +143,7 @@ parseCabalFile :: LByteString -> Either (Maybe Version, NonEmpty PError) CabalFi
 parseCabalFile lbs = do
   gpd <- egpd
   let
+    getDeps' :: L.HasBuildInfo a => CondTree ConfVar a -> Map PackageName VersionRange
     getDeps' = getDeps (getCheckCond gpd)
     pd = packageDescription gpd
   Right CabalFile
@@ -162,7 +165,10 @@ parseCabalFile lbs = do
     , cfDescription = shortTextKey $ description pd
     }
   where
-    egpd = snd $ runParseResult parseResult
+    egpd =
+      case snd $ runParseResult parseResult of
+        Left (mversion, perrs) -> Left (mversion, perror <$> perrs)
+        Right gpd -> Right gpd
     parseResult = parseGenericPackageDescription $ toStrict lbs
 
 
@@ -184,14 +190,16 @@ getCheckCond gpd = go
         toPair f = (flagName f, flagDefault f)
 
 getDeps
-  :: (Condition ConfVar -> Bool)
-  -> CondTree ConfVar [Dependency] a
+  :: L.HasBuildInfo a
+  => (Condition ConfVar -> Bool)
+  -> CondTree ConfVar a
   -> Map PackageName VersionRange
 getDeps checkCond = goTree
   where
-    goTree (CondNode _data deps comps) =
+    goTree (CondNode dat comps) =
       combineDeps $
-      map (\(Dependency name range _) -> Map.singleton name range) deps ++
+      map (\(Dependency name range _) -> Map.singleton name range)
+          (dat L.^. L.targetBuildDepends) ++
       map goComp comps
     goComp (CondBranch cond yes no)
       | checkCond cond = goTree yes
