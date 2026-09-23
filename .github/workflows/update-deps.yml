@@ -1,4 +1,4 @@
-name: Update Dependencies
+name: Dependency update trigger (scheduled)
 
 on:
   schedule:
