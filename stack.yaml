@@ -8,8 +8,8 @@ extra-deps:
   commit: 1546b0c2a2f56e28b9ed5a1c5bf1a10adcad8b6c
 # Not in snapshot
 - patience-0.3@sha256:491a8d0bfbffc06311c41dadf225eb96b52a0dd95c089778ac2ba0b13dd58d6e,1558
-- Cabal-3.18.1.0
-- Cabal-syntax-3.18.1.0
+- Cabal-3.18.2.0
+- Cabal-syntax-3.18.2.0
 # See Note [Riding latest Cabal] in nix/scripts/update-deps.sh
 - hackage-security-0.6.4.0
 - cabal-doctest-1.0.13
